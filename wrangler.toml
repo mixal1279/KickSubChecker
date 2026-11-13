@@ -1,0 +1,15 @@
+name = "kick-sub-checker"
+main = "index.js"
+compatibility_date = "2026-10-01"
+
+[[kv_namespaces]]
+binding = "SUBS_KV"
+id = "REPLACE_WITH_REAL_KV_NAMESPACE_ID"
+
+[vars]
+REDIRECT_URI = "https://REPLACE_WITH_WORKER_HOST/callback" # MUST be replaced before deploy
+
+# Configure these as Cloudflare secrets, never commit real values:
+# npx wrangler secret put KICK_CLIENT_ID
+# npx wrangler secret put KICK_CLIENT_SECRET
+# npx wrangler secret put BOT_API_SECRET

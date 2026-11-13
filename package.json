@@ -1,0 +1,19 @@
+{
+  "name": "kick-sub-checker",
+  "version": "1.1.0",
+  "private": true,
+  "description": "Discord bot and Cloudflare Worker for verified Kick subscriber roles",
+  "main": "KickSubChecker.js",
+  "scripts": {
+    "start": "node KickSubChecker.js",
+    "check": "node --check KickSubChecker.js && node --check index.js && node --check register-events-once.js",
+    "test": "node --experimental-default-type=module --test"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.17.0"
+  }
+}
