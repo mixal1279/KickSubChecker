@@ -246,12 +246,17 @@ export function utworzRepozytoriumD1(db) {
             updated_at_ms = excluded.updated_at_ms
         `).bind(kanal, klucz, kickId, nick, expiry, sub.source, teraz, kanal, eventId);
       });
-      polecenia.push(db.prepare(`
+      // D1 batch ma limit liczby instrukcji; porcje są idempotentne.
+      // Event pozostaje processing do czasu zapisania wszystkich odbiorców.
+      for (let i = 0; i < polecenia.length; i += 90) {
+        const wyniki = await db.batch(polecenia.slice(i, i + 90));
+        wyniki.forEach((wynik, j) => sprawdzWynik(wynik, `Zapis webhooka (operacja ${i + j + 1})`));
+      }
+      const finalizacja = await db.prepare(`
         UPDATE webhook_events SET status = 'processed', processed_at_ms = ?
         WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
-      `).bind(teraz, kanal, eventId));
-      const wyniki = await db.batch(polecenia);
-      wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Zapis webhooka (operacja ${i + 1})`));
+      `).bind(teraz, kanal, eventId).run();
+      sprawdzWynik(finalizacja, 'Finalizacja webhooka');
     },
 
     async oznaczWebhookNieudany({ broadcasterId, eventId }) {
