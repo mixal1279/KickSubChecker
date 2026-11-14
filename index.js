@@ -333,8 +333,10 @@ async function handleApi(request, env) {
     if (!repo) return json({ error: 'd1_not_configured' }, 503);
     const dryRun = url.searchParams.get('dry_run') !== 'false';
     const owner = await kickCurrentUser(await getBroadcasterAccessToken(env));
-    await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
-    await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
+    if (!dryRun) {
+      await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
+      await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
+    }
     const raport = { dry_run: dryRun, broadcaster_id: owner.user_id, links_seen: 0, links_imported: 0, links_skipped: 0, subscriptions_seen: 0, subscriptions_imported: 0, errors: [] };
     let cursor;
     do {
