@@ -134,13 +134,27 @@ async function handleCallback(request, env) {
       const user = await kickCurrentUser(tokens.access_token);
       const username = user.username.toLowerCase();
       if (!USERNAME_RE.test(username)) return text('Kick zwrócił nieobsługiwany nick. Skontaktuj się z administratorem.', 400);
-      const previous = await env.SUBS_KV.get(`link:discord:${pending.discord_id}`, 'json');
-      const existing = await env.SUBS_KV.get(`link:kick:${username}`, 'json');
-      if (existing && existing.discord_id !== pending.discord_id) return text('To konto Kick jest już połączone z innym kontem Discord. Skontaktuj się z administratorem.', 409);
-      if (previous?.username && previous.username.toLowerCase() !== username) await env.SUBS_KV.delete(`link:kick:${previous.username.toLowerCase()}`);
       const record = { discord_id: pending.discord_id, username, kick_user_id: user.user_id, linked_at: new Date().toISOString() };
-      await env.SUBS_KV.put(`link:discord:${pending.discord_id}`, JSON.stringify(record));
-      await env.SUBS_KV.put(`link:kick:${username}`, JSON.stringify(record));
+      const repo = repozytorium(env);
+      if (repo) {
+        const broadcasterId = await pobierzBroadcasterId(env);
+        try {
+          await repo.polaczKonto({
+            broadcasterId, discordUserId: pending.discord_id,
+            kickUserId: user.user_id, kickUsername: username,
+          });
+        } catch (error) {
+          if (/UNIQUE|constraint/i.test(error.message)) return text('To konto Kick jest już połączone z innym kontem Discord na tym kanale.', 409);
+          throw error;
+        }
+      } else {
+        const previous = await env.SUBS_KV.get(`link:discord:${pending.discord_id}`, 'json');
+        const existing = await env.SUBS_KV.get(`link:kick:${username}`, 'json');
+        if (existing && existing.discord_id !== pending.discord_id) return text('To konto Kick jest już połączone z innym kontem Discord. Skontaktuj się z administratorem.', 409);
+        if (previous?.username && previous.username.toLowerCase() !== username) await env.SUBS_KV.delete(`link:kick:${previous.username.toLowerCase()}`);
+        await env.SUBS_KV.put(`link:discord:${pending.discord_id}`, JSON.stringify(record));
+        await env.SUBS_KV.put(`link:kick:${username}`, JSON.stringify(record));
+      }
       return text(`Połączono konto Kick @${username}. Możesz wrócić na Discorda; rola zostanie zsynchronizowana w ciągu 10 minut.`);
     } catch (error) { console.error('Błąd łączenia konta Kick:', error.message); return text('Nie udało się zweryfikować konta Kick. Spróbuj ponownie.', 502); }
   }
