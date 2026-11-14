@@ -72,11 +72,11 @@ async function checkSub(username, userId = null) {
   const nick = String(username || '').trim().replace(/^@/, '');
   const id = userId == null ? '' : String(userId).trim();
   if (id && !/^[0-9]{1,32}$/.test(id)) throw new Error('Nieprawidłowy ID użytkownika Kick.');
-  if (!id && !USERNAME_RE.test(nick)) throw new Error('Nieprawidłowy nick Kick. Użyj 1–25 liter, cyfr, podkreśleń lub myślników.');
-  if (nick && !USERNAME_RE.test(nick)) throw new Error('Nieprawidłowy nick Kick.');
+  const poprawnyNick = USERNAME_RE.test(nick) ? nick : '';
+  if (!id && !poprawnyNick) throw new Error('Nieprawidłowy nick Kick. Użyj 1–25 liter, cyfr, podkreśleń lub myślników.');
   const params = new URLSearchParams();
   if (id) params.set('user_id', id);
-  if (nick) params.set('username', nick);
+  if (poprawnyNick) params.set('username', poprawnyNick);
   return workerRequest(`/api/check?${params.toString()}`);
 }
 async function getLinkedAccounts() { return workerRequest('/api/links'); }
