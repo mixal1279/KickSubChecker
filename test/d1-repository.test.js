@@ -112,3 +112,44 @@ test('duplikat webhooka nie jest ponownie przejmowany', async () => {
   assert.equal(db.wywolania.length, 2);
   assert.match(db.wywolania[1].sql, /status = 'failed'/);
 });
+
+test('wyszukiwanie subskrypcji po ID nie wymaga nicku', async () => {
+  const db = utworzFakeD1({ pierwszy: {
+    kick_username: 'Nick-Z-Myslnikiem',
+    expires_at_ms: Date.now() + 60_000,
+    source: 'gift',
+  } });
+  const repo = utworzRepozytoriumD1(db);
+  const status = await repo.sprawdzSubskrypcje({
+    broadcasterId: '12345',
+    kickUserId: '34567',
+  });
+  assert.equal(status.status, 'active');
+  assert.equal(status.username, 'Nick-Z-Myslnikiem');
+  assert.deepEqual(db.wywolania[0].args, ['12345', '34567', '34567', null, null, '34567', '34567']);
+});
+
+test('zachowuje historyczne źródło gift i akceptuje myślnik w nicku', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await repo.zapiszSubskrypcje({
+    broadcasterId: '12345',
+    kickUserId: '34567',
+    kickUsername: 'Nick-Z-Myslnikiem',
+    expiresAtMs: Date.now() + 60_000,
+    source: 'gift',
+  });
+  assert.equal(db.wywolania[0].typ, 'run');
+  assert.equal(db.wywolania[0].args[5], 'gift');
+  assert.equal(db.wywolania[0].args[3], 'Nick-Z-Myslnikiem');
+});
+
+test('odrzuca zapytanie o subskrypcję bez nicku i ID', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await assert.rejects(
+    repo.sprawdzSubskrypcje({ broadcasterId: '12345' }),
+    /Podaj ID lub nick/,
+  );
+  assert.equal(db.wywolania.length, 0);
+});
