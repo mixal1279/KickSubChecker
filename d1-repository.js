@@ -181,8 +181,10 @@ export function utworzRepozytoriumD1(db) {
         FROM subscriptions
         WHERE broadcaster_id = ?
           AND ((? IS NOT NULL AND kick_user_id = ?) OR kick_username = ? COLLATE NOCASE)
-        ORDER BY expires_at_ms DESC LIMIT 1
-      `).bind(kanal, kickId, kickId, nick).first();
+        ORDER BY CASE WHEN ? IS NOT NULL AND kick_user_id = ? THEN 0 ELSE 1 END,
+                 expires_at_ms DESC
+        LIMIT 1
+      `).bind(kanal, kickId, kickId, nick, kickId, kickId).first();
       if (!rekord || !Number.isSafeInteger(Number(rekord.expires_at_ms))) {
         return { status: 'unknown', subscribed: null, expires_at_ms: null };
       }
