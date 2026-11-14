@@ -74,10 +74,11 @@ Projekt ma dwie osobne części: `KickSubChecker.js` to bot Discord (Node.js), a
 Backend v2 może przejąć powiązania, subskrypcje i webhooki w D1, ale tokeny właściciela kanału nadal są przechowywane w KV pod istniejącym kluczem `ljay:tokens`. Worker potrafi odczytać tożsamość kanału z obecnego tokenu i odświeżyć go standardowym refresh tokenem. **Samo przełączenie bazy nie wymaga ponownej autoryzacji Kick.**
 
 Szczegółowa, bezpieczna procedura znajduje się w [docs/backend-v2-migration.md](docs/backend-v2-migration.md). Najważniejsze:
-- skonfiguruj binding D1 (`DB`) i zastosuj `migrations/0001_backend_v2.sql`;
+- skonfiguruj binding D1 (`DB`) i zastosuj migracje `0001` oraz `0002`;
+- instalacja obsługuje jeden kanał Kick i jeden serwer Discord;
 - pozostaw `D1_ENABLED = "false"`;
 - wykonaj dry-run endpointu `POST /api/admin/migrate-kv`;
-- po analizie raportu wykonaj import z `?dry_run=false`;
-- dopiero po weryfikacji ustaw `D1_ENABLED = "true"`.
+- sprawdź raport, w tym stare źródła `gift`, `new`, `renewal`, a następnie wykonaj import z `?dry_run=false`;
+- dopiero po porównaniu danych ustaw `D1_ENABLED = "true"`.
 
 Nie usuwaj KV po przełączeniu — nadal przechowuje tokeny OAuth, stan PKCE, jednorazowe linki i cache klucza publicznego. Endpoint migracyjny wymaga tego samego Bearer secret co API bota.
