@@ -1,9 +1,12 @@
 const ID_RE = /^[0-9]{1,32}$/;
-const USERNAME_RE = /^[a-zA-Z0-9_]{1,25}$/;
+const USERNAME_RE = /^[a-zA-Z0-9_-]{1,25}$/;
 const SOURCE_TYPES = new Set([
   'channel.subscription.new',
   'channel.subscription.renewal',
   'channel.subscription.gifts',
+  'gift',
+  'new',
+  'renewal',
   'admin',
 ]);
 
@@ -174,17 +177,18 @@ export function utworzRepozytoriumD1(db) {
 
     async sprawdzSubskrypcje({ broadcasterId, kickUserId, kickUsername }) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
-      const kickId = kickUserId == null ? null : wymagajId(kickUserId, 'ID użytkownika Kick');
-      const nick = normalizujNick(kickUsername);
+      const kickId = kickUserId == null || kickUserId === '' ? null : wymagajId(kickUserId, 'ID użytkownika Kick');
+      const nick = kickUsername == null || kickUsername === '' ? null : normalizujNick(kickUsername);
+      if (!kickId && !nick) throw new TypeError('Podaj ID lub nick użytkownika Kick.');
       const rekord = await db.prepare(`
         SELECT kick_username, expires_at_ms, source
         FROM subscriptions
         WHERE broadcaster_id = ?
-          AND ((? IS NOT NULL AND kick_user_id = ?) OR kick_username = ? COLLATE NOCASE)
+          AND ((? IS NOT NULL AND kick_user_id = ?) OR (? IS NOT NULL AND kick_username = ? COLLATE NOCASE))
         ORDER BY CASE WHEN ? IS NOT NULL AND kick_user_id = ? THEN 0 ELSE 1 END,
                  expires_at_ms DESC
         LIMIT 1
-      `).bind(kanal, kickId, kickId, nick, kickId, kickId).first();
+      `).bind(kanal, kickId, kickId, nick, nick, kickId, kickId).first();
       if (!rekord || !Number.isSafeInteger(Number(rekord.expires_at_ms))) {
         return { status: 'unknown', subscribed: null, expires_at_ms: null };
       }
