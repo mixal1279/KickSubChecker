@@ -322,6 +322,74 @@ async function handleApi(request, env) {
     const record = await env.SUBS_KV.get(`link:discord:${discordId}`, 'json');
     return json({ username: record?.username || null, linked_at: record?.linked_at || null });
   }
+  if (url.pathname === '/api/admin/migrate-kv') {
+    if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
+    const repo = repozytorium(env);
+    if (!repo) return json({ error: 'd1_not_configured' }, 503);
+    const dryRun = url.searchParams.get('dry_run') !== 'false';
+    const owner = await kickCurrentUser(await getBroadcasterAccessToken(env));
+    await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
+    await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
+    const raport = { dry_run: dryRun, broadcaster_id: owner.user_id, links_seen: 0, links_imported: 0, links_skipped: 0, subscriptions_seen: 0, subscriptions_imported: 0, errors: [] };
+    let cursor;
+    do {
+      const page = await env.SUBS_KV.list({ prefix: 'link:discord:', cursor, limit: 500 });
+      for (const key of page.keys) {
+        raport.links_seen++;
+        const record = await env.SUBS_KV.get(key.name, 'json');
+        if (!record?.discord_id || !record?.kick_user_id || !record?.username) {
+          raport.links_skipped++;
+          continue;
+        }
+        if (!dryRun) {
+          try {
+            await repo.polaczKonto({
+              broadcasterId: owner.user_id,
+              discordUserId: String(record.discord_id),
+              kickUserId: String(record.kick_user_id),
+              kickUsername: String(record.username),
+            });
+            raport.links_imported++;
+          } catch (error) {
+            raport.links_skipped++;
+            if (raport.errors.length < 20) raport.errors.push({ type: 'link', discord_id: String(record.discord_id), reason: error.message.slice(0, 160) });
+          }
+        }
+      }
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+
+    cursor = undefined;
+    do {
+      const page = await env.SUBS_KV.list({ prefix: 'sub:', cursor, limit: 500 });
+      for (const key of page.keys) {
+        raport.subscriptions_seen++;
+        const record = await env.SUBS_KV.get(key.name, 'json');
+        const expiry = Date.parse(record?.expires_at || '');
+        const username = record?.username;
+        if (typeof username !== 'string' || !USERNAME_RE.test(username) || !Number.isFinite(expiry)) {
+          raport.errors.length < 20 && raport.errors.push({ type: 'subscription', key: key.name, reason: 'invalid_record' });
+          continue;
+        }
+        if (!dryRun) {
+          try {
+            await repo.zapiszSubskrypcje({
+              broadcasterId: owner.user_id,
+              kickUserId: record.user_id ? String(record.user_id) : null,
+              kickUsername: username,
+              expiresAtMs: expiry,
+              source: ['channel.subscription.new', 'channel.subscription.renewal', 'channel.subscription.gifts', 'admin'].includes(record.source) ? record.source : 'admin',
+            });
+            raport.subscriptions_imported++;
+          } catch (error) {
+            if (raport.errors.length < 20) raport.errors.push({ type: 'subscription', key: key.name, reason: error.message.slice(0, 160) });
+          }
+        }
+      }
+      cursor = page.list_complete ? undefined : page.cursor;
+    } while (cursor);
+    return json(raport);
+  }
   if (url.pathname === '/api/links') {
     const repo = repozytorium(env);
     if (repo) {
