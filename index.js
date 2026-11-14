@@ -337,7 +337,7 @@ async function handleApi(request, env) {
       await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
       await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
     }
-    const raport = { dry_run: dryRun, broadcaster_id: owner.user_id, links_seen: 0, links_imported: 0, links_skipped: 0, subscriptions_seen: 0, subscriptions_imported: 0, errors: [] };
+    const raport = { dry_run: dryRun, broadcaster_id: owner.user_id, links_seen: 0, links_valid: 0, links_imported: 0, links_skipped: 0, subscriptions_seen: 0, subscriptions_valid: 0, subscriptions_imported: 0, errors: [] };
     let cursor;
     do {
       const page = await env.SUBS_KV.list({ prefix: 'link:discord:', cursor, limit: 500 });
@@ -348,6 +348,7 @@ async function handleApi(request, env) {
           raport.links_skipped++;
           continue;
         }
+        raport.links_valid++;
         if (!dryRun) {
           try {
             await repo.polaczKonto({
@@ -378,6 +379,7 @@ async function handleApi(request, env) {
           raport.errors.length < 20 && raport.errors.push({ type: 'subscription', key: key.name, reason: 'invalid_record' });
           continue;
         }
+        raport.subscriptions_valid++;
         if (!dryRun) {
           try {
             await repo.zapiszSubskrypcje({
