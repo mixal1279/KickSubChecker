@@ -178,7 +178,7 @@ test('retencja usuwa wyłącznie stare zakończone webhooki', async () => {
   assert.equal(usuniete, 1);
   assert.equal(db.wywolania[0].typ, 'batch');
   assert.match(db.wywolania[0].polecenia[0].sql, /DELETE FROM webhook_events/);
-  assert.match(db.wywolania[0].polecenia[0].sql, /COALESCE\\(processed_at_ms, received_at_ms\\)/);
+  assert.ok(db.wywolania[0].polecenia[0].sql.includes("COALESCE(processed_at_ms, received_at_ms)"));
 });
 
 test('retencja odrzuca nieprawidłową granicę czasu', async () => {
