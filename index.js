@@ -589,4 +589,14 @@ export default {
       return url.pathname.startsWith('/api/') ? json({ error: 'internal_error' }, 500) : text('Wystąpił wewnętrzny błąd serwera.', 500);
     }
   },
+
+  async scheduled(_event, env, ctx) {
+    const repo = repozytorium(env);
+    if (!repo) return;
+    ctx.waitUntil(
+      repo.oczyscWebhooki({ retentionBeforeMs: Date.now() - 30 * 24 * 60 * 60 * 1000 })
+        .then((usuniete) => console.log(`Retencja webhooków: usunięto ${usuniete} starych rekordów.`))
+        .catch((error) => console.error('Czyszczenie retencji webhooków nie powiodło się:', error.message)),
+    );
+  },
 };
