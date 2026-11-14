@@ -122,8 +122,11 @@ async function kickCurrentUser(accessToken) {
   const response = await fetch(KICK_USERS_URL, { headers: { Authorization: `Bearer ${accessToken}` } });
   const data = await parseJsonResponse(response, 'Pobieranie tożsamości Kick');
   const user = Array.isArray(data.data) ? data.data[0] : data.data;
-  if (!user || !user.username || user.user_id == null) throw new Error('Nie udało się potwierdzić tożsamości konta Kick.');
-  return { username: String(user.username), user_id: String(user.user_id) };
+  if (
+    !user || typeof user.username !== 'string' || !USERNAME_RE.test(user.username)
+    || user.user_id == null || !/^[0-9]{1,32}$/.test(String(user.user_id))
+  ) throw new Error('Nie udało się potwierdzić poprawnej tożsamości konta Kick.');
+  return { username: user.username, user_id: String(user.user_id) };
 }
 async function handleAuthorize(request, env) {
   if (request.method !== 'GET') return text('Method Not Allowed', 405);
@@ -193,9 +196,22 @@ async function handleCallback(request, env) {
   try {
     // Zachowujemy istniejące klucze tokenów w KV — migracja D1 nie wymaga ponownego OAuth.
     const owner = await kickCurrentUser(tokens.access_token);
-    if (pending.expected_username && owner.username.toLowerCase() !== pending.expected_username) {
-      return text('Autoryzowane konto Kick nie jest oczekiwanym kanałem.', 403);
+    const configuredId = String(env.KICK_BROADCASTER_ID || '').trim();
+    const storedId = await env.SUBS_KV.get('config:broadcaster_id');
+    if (configuredId && !/^[0-9]{1,32}$/.test(configuredId)) {
+      return text('KICK_BROADCASTER_ID ma nieprawidłowy format.', 500);
     }
+    if (storedId && !/^[0-9]{1,32}$/.test(storedId)) {
+      return text('Zapisany ID kanału Kick jest nieprawidłowy.', 500);
+    }
+    if (
+      (pending.expected_username && owner.username.toLowerCase() !== pending.expected_username)
+      || (configuredId && owner.user_id !== configuredId)
+      || (storedId && owner.user_id !== storedId)
+    ) {
+      return text('Autoryzowane konto Kick nie jest wcześniej skonfigurowanym kanałem. Zmiana kanału wymaga osobnej procedury.', 403);
+    }
+    // Nie zapisujemy tokenów ani konfiguracji, dopóki tożsamość kanału nie przejdzie kontroli.
     await saveTokens(env, tokens);
     await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
     await env.SUBS_KV.put('config:broadcaster_username', owner.username);
@@ -381,34 +397,71 @@ async function handleApi(request, env) {
     if (!repo) return json({ error: 'd1_not_configured' }, 503);
     const dryRun = url.searchParams.get('dry_run') !== 'false';
     const owner = await kickCurrentUser(await getBroadcasterAccessToken(env));
+    const configuredId = String(env.KICK_BROADCASTER_ID || '').trim();
+    const storedId = await env.SUBS_KV.get('config:broadcaster_id');
+    if (
+      (configuredId && configuredId !== owner.user_id)
+      || (storedId && storedId !== owner.user_id)
+    ) return json({ error: 'broadcaster_mismatch' }, 409);
+
     if (!dryRun) {
       await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
+      await env.SUBS_KV.put('config:broadcaster_username', owner.username);
       await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
     }
-    const raport = { dry_run: dryRun, broadcaster_id: owner.user_id, links_seen: 0, links_valid: 0, links_imported: 0, links_skipped: 0, subscriptions_seen: 0, subscriptions_valid: 0, subscriptions_imported: 0, errors: [] };
+
+    const raport = {
+      dry_run: dryRun, broadcaster_id: owner.user_id,
+      links_seen: 0, links_valid: 0, links_imported: 0, links_skipped: 0,
+      subscriptions_seen: 0, subscriptions_valid: 0, subscriptions_imported: 0,
+      errors: [],
+    };
+    const dodajBlad = (typ, key, reason) => {
+      if (raport.errors.length < 50) raport.errors.push({ type: typ, key, reason });
+    };
+    const discordIds = new Set();
+    const kickIds = new Set();
     let cursor;
     do {
       const page = await env.SUBS_KV.list({ prefix: 'link:discord:', cursor, limit: 500 });
       for (const key of page.keys) {
         raport.links_seen++;
         const record = await env.SUBS_KV.get(key.name, 'json');
-        if (!record?.discord_id || !record?.kick_user_id || !record?.username) {
+        const discordIdZKlucza = key.name.slice('link:discord:'.length);
+        const discordId = String(record?.discord_id || '');
+        const kickId = String(record?.kick_user_id || '');
+        const username = record?.username;
+        if (
+          !/^\d{17,20}$/.test(discordIdZKlucza)
+          || discordId !== discordIdZKlucza
+          || !/^\d{17,20}$/.test(discordId)
+          || !/^[0-9]{1,32}$/.test(kickId)
+          || typeof username !== 'string' || !USERNAME_RE.test(username)
+        ) {
           raport.links_skipped++;
+          dodajBlad('link', key.name, 'invalid_record');
           continue;
         }
+        if (discordIds.has(discordId) || kickIds.has(kickId)) {
+          raport.links_skipped++;
+          dodajBlad('link', key.name, 'duplicate_discord_or_kick_id');
+          continue;
+        }
+        discordIds.add(discordId);
+        kickIds.add(kickId);
         raport.links_valid++;
         if (!dryRun) {
           try {
             await repo.polaczKonto({
               broadcasterId: owner.user_id,
-              discordUserId: String(record.discord_id),
-              kickUserId: String(record.kick_user_id),
-              kickUsername: String(record.username),
+              discordUserId: discordId,
+              kickUserId: kickId,
+              kickUsername: username,
             });
             raport.links_imported++;
           } catch (error) {
             raport.links_skipped++;
-            if (raport.errors.length < 20) raport.errors.push({ type: 'link', discord_id: String(record.discord_id), reason: error.message.slice(0, 160) });
+            if (raport.errors.length < 50) dodajBlad('link', key.name, String(error.message).slice(0, 160));
           }
         }
       }
@@ -419,13 +472,20 @@ async function handleApi(request, env) {
     do {
       const page = await env.SUBS_KV.list({ prefix: 'sub:', cursor, limit: 500 });
       for (const key of page.keys) {
-        if (key.name.startsWith('sub:user_id:')) continue; // Importujemy rekordy kanoniczne, nie indeksy pomocnicze.
+        if (key.name.startsWith('sub:user_id:')) continue;
         raport.subscriptions_seen++;
         const record = await env.SUBS_KV.get(key.name, 'json');
         const expiry = Date.parse(record?.expires_at || '');
         const username = record?.username;
-        if (typeof username !== 'string' || !USERNAME_RE.test(username) || !Number.isFinite(expiry)) {
-          raport.errors.length < 20 && raport.errors.push({ type: 'subscription', key: key.name, reason: 'invalid_record' });
+        const expectedKey = typeof username === 'string' ? `sub:${username.toLowerCase()}` : '';
+        const kickId = record?.user_id == null || record.user_id === '' ? null : String(record.user_id);
+        if (
+          typeof username !== 'string' || !USERNAME_RE.test(username)
+          || key.name !== expectedKey
+          || !Number.isSafeInteger(expiry) || expiry <= 0
+          || (kickId !== null && !/^[0-9]{1,32}$/.test(kickId))
+        ) {
+          dodajBlad('subscription', key.name, 'invalid_record');
           continue;
         }
         raport.subscriptions_valid++;
@@ -433,14 +493,14 @@ async function handleApi(request, env) {
           try {
             await repo.zapiszSubskrypcje({
               broadcasterId: owner.user_id,
-              kickUserId: record.user_id ? String(record.user_id) : null,
+              kickUserId: kickId,
               kickUsername: username,
               expiresAtMs: expiry,
               source: ['channel.subscription.new', 'channel.subscription.renewal', 'channel.subscription.gifts', 'gift', 'new', 'renewal', 'admin'].includes(record.source) ? record.source : 'admin',
             });
             raport.subscriptions_imported++;
           } catch (error) {
-            if (raport.errors.length < 20) raport.errors.push({ type: 'subscription', key: key.name, reason: error.message.slice(0, 160) });
+            dodajBlad('subscription', key.name, String(error.message).slice(0, 160));
           }
         }
       }
