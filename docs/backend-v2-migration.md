@@ -34,3 +34,16 @@ Migracja jest idempotentna i nie usuwa ani nie modyfikuje istniejących danych K
 ## Ważne
 
 Ta zmiana dodaje schemat i plan migracji. Nie przełącza jeszcze działającego Workera na D1 i nie wymaga zmiany sekretów ani konfiguracji produkcyjnej. Nie uruchamiaj migracji przed utworzeniem bazy D1.
+
+
+## Adapter D1
+
+Plik `d1-repository.js` udostępnia repozytorium bez zależności zewnętrznych:
+- `zapiszKanal`, `ustawRole`, `pobierzRole` — konfiguracja per kanał i guild;
+- `polaczKonto`, `odlaczKonto`, `pobierzPowiazanie`, `pobierzPowiazania` — operacje na powiązaniach;
+- `zapiszSubskrypcje`, `sprawdzSubskrypcje` — zapis i odczyt stanu subskrypcji;
+- `przejmijWebhook`, `zakonczWebhook`, `oznaczWebhookNieudany` — kontrola przetwarzania webhooków.
+
+Łączenie kont używa D1 batch: usunięcie poprzedniego powiązania Discord i wstawienie nowego wraz z audytem są jedną operacją transakcyjną. Konflikt unikalnego ID Kick powoduje wycofanie całej paczki. Webhook otrzymuje atomowy claim przez `INSERT OR IGNORE`; ponowne przejęcie jest możliwe po błędzie lub po 5 minutach bezczynnego statusu `processing`. Zapisy subskrypcji są ograniczone do eventu w stanie `processing`, a data wygaśnięcia nigdy nie jest cofana.
+
+Testy adaptera znajdują się w `test/d1-repository.test.js`. Adapter nie jest jeszcze podłączony do routingu Workera — aktualny kod nadal korzysta z KV. Przed przełączeniem trzeba dodać konfigurację bindingu D1, przepiąć endpointy i webhook, a następnie wykonać migrator KV → D1.
