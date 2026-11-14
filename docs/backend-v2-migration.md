@@ -1,74 +1,55 @@
-# Backend v2 — plan migracji
+# Backend v2 — migracja KV → D1
 
-## Założenia
+## Docelowa instalacja
 
-- Dane trwałe są izolowane przez `broadcaster_id`; rekord jednego kanału Kick nie może wpływać na inny kanał.
-- Konfiguracja roli jest przypisana do pary kanał Kick + serwer Discord.
-- W ramach jednego kanału konto Discord i konto Kick mogą być powiązane maksymalnie raz.
-- Identyfikator Kick jest kluczem subskrybenta; gdy webhook nie dostarczy ID, adapter może użyć klucza `name:<lowercase-username>`.
-- OAuth state, jednorazowe linki i cache klucza publicznego pozostają krótkotrwałymi wpisami KV.
-- Tokeny OAuth nie trafiają do tabel biznesowych ani logów. Do czasu osobnego przeglądu pozostają w istniejącym magazynie KV.
-- Status `unknown` nie może skutkować odebraniem roli.
+Ta instalacja obsługuje dokładnie:
+- jeden kanał Kick, identyfikowany przez `broadcaster_id`;
+- jeden serwer Discord, identyfikowany przez `guild_id`;
+- jedną rolę subskrybenta na tym serwerze.
 
-## Migracja 0001
+Nie implementujemy multi-channel ani multi-guild. Bot zapisuje `guildId` i `roleId` w swoim lokalnym `config.json`; konfiguracja roli nie jest obecnie odczytywana z tabeli `guild_configs`. Komendy konfiguracyjne muszą blokować zmianę serwera po pierwszej konfiguracji.
 
-Plik `migrations/0001_backend_v2.sql` tworzy tabele:
-- `channels` — kanały Kick obsługiwane przez instalację;
-- `guild_configs` — konfiguracja ról per kanał i serwer Discord;
-- `account_links` — zweryfikowane powiązania kont;
-- `subscriptions` — ostatni znany stan subskrypcji;
-- `webhook_events` — deduplikacja i stan przetwarzania webhooków;
-- `audit_log` — ślad operacji administracyjnych i systemowych.
+Dane subskrypcji, zweryfikowane powiązania kont i deduplikacja webhooków są w D1, zawsze z kluczem `broadcaster_id`. OAuth state, jednorazowe linki, klucz publiczny i tokeny właściciela pozostają w KV. Tokeny nie trafiają do D1 ani logów.
 
-Migracja jest idempotentna i nie usuwa ani nie modyfikuje istniejących danych KV.
+## Kompatybilność z działającym Workerem
 
-## Kolejność przełączenia
+Zmiana zachowuje endpointy:
+- `/ljay-live` i `/ljay-live/start` — OAuth dla kanału `ljaylive`;
+- `/preview` — strona podglądu;
+- `/authorize`, `/callback`, `/webhook`, `/register-events`;
+- dotychczasowe endpointy `/api/*`.
 
-1. Utworzyć bazę D1 i zastosować migrację.
-2. Dodać adapter repozytorium D1 z parametryzowanymi zapytaniami.
-3. Przepisać zapis powiązań tak, aby oba kierunki były aktualizowane w jednej transakcji.
-4. Przepisać obsługę webhooków: atomowo zgłosić event, zapisać subskrypcje i oznaczyć event jako przetworzony; awaria nie może pozostawić fałszywego sukcesu.
-5. Dodać migrator KV → D1 z trybem dry-run, raportem konfliktów i możliwością bezpiecznego ponowienia.
-6. Dopiero po porównaniu danych przełączyć odczyty na D1. KV pozostawić jako rollback/read-only przez uzgodniony okres.
+`/api/check` obsługuje zarówno `username`, jak i `user_id`. Odczyt po ID ma pierwszeństwo, a odpowiedź zachowuje format statusu `active`, `inactive` lub `unknown`. KV utrzymuje indeksy `sub:<username>` i `sub:user_id:<id>`.
 
-## Ważne
+Odświeżanie OAuth zachowuje poprzedni refresh token, jeśli Kick nie zwróci nowego. Przy pierwszym ustaleniu kanału Worker potwierdza ID przez autoryzowany endpoint Kick; skonfigurowany `KICK_BROADCASTER_ID` nie może wskazywać innego konta.
 
-Ta zmiana dodaje schemat i plan migracji. Nie przełącza jeszcze działającego Workera na D1 i nie wymaga zmiany sekretów ani konfiguracji produkcyjnej. Nie uruchamiaj migracji przed utworzeniem bazy D1.
+## Migracje SQL
 
+- `0001_backend_v2.sql` tworzy tabele kanałów, konfiguracji, powiązań, subskrypcji, webhooków i audytu.
+- `0002_legacy_subscription_sources.sql` rozszerza dozwolone źródła subskrypcji, zachowując rekordy już zapisane w D1. Wspiera stare wartości `gift`, `new`, `renewal` oraz nowe nazwy eventów Kick.
 
-## Adapter D1
+Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanej migracji 0001 — zmiany schematu wprowadzaj kolejnymi numerowanymi migracjami.
 
-Plik `d1-repository.js` udostępnia repozytorium bez zależności zewnętrznych:
-- `zapiszKanal`, `ustawRole`, `pobierzRole` — konfiguracja per kanał i guild;
-- `polaczKonto`, `odlaczKonto`, `pobierzPowiazanie`, `pobierzPowiazania` — operacje na powiązaniach;
-- `zapiszSubskrypcje`, `sprawdzSubskrypcje` — zapis i odczyt stanu subskrypcji;
-- `przejmijWebhook`, `zakonczWebhook`, `oznaczWebhookNieudany` — kontrola przetwarzania webhooków.
+## Kolejność bezpiecznego przełączenia
 
-Łączenie kont używa D1 batch: usunięcie poprzedniego powiązania Discord i wstawienie nowego wraz z audytem są jedną operacją transakcyjną. Konflikt unikalnego ID Kick powoduje wycofanie całej paczki. Webhook otrzymuje atomowy claim przez `INSERT OR IGNORE`; ponowne przejęcie jest możliwe po błędzie lub po 5 minutach bezczynnego statusu `processing`. Zapisy subskrypcji są ograniczone do eventu w stanie `processing`, a data wygaśnięcia nigdy nie jest cofana.
+1. Zastosuj migracje D1 `0001` i `0002` w środowisku docelowym.
+2. Ustaw `D1_ENABLED = "false"`. Nie wdrażaj przełączenia na produkcję na tym etapie.
+3. Uruchom `POST /api/admin/migrate-kv` (domyślnie dry-run).
+4. Sprawdź `links_skipped`, `subscriptions_seen`, `subscriptions_valid` i `errors`. Indeksy `sub:user_id:` są pomijane — importowane są tylko kanoniczne rekordy `sub:<username>`.
+5. Uruchom import przez `POST /api/admin/migrate-kv?dry_run=false`. Operacja nie usuwa źródłowych rekordów KV i może być ponawiana.
+6. Porównaj liczbę rekordów i sprawdź konta testowe po nicku oraz po ID.
+7. Dopiero po walidacji ustaw `D1_ENABLED = "true"` i wykonaj kontrolowane wdrożenie.
 
-Testy adaptera znajdują się w `test/d1-repository.test.js`. Adapter nie jest jeszcze podłączony do routingu Workera — aktualny kod nadal korzysta z KV. Przed przełączeniem trzeba dodać konfigurację bindingu D1, przepiąć endpointy i webhook, a następnie wykonać migrator KV → D1.
+Endpoint migracyjny wymaga Bearer secret bota. Nie umieszczaj sekretu w repozytorium ani w logach. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje OAuth i stan pomocniczy.
 
+## Testy wymagane przed cutoverem
 
-## Zachowanie OAuth i przełączenie Workera
+- testy adaptera D1 i walidacji danych;
+- testy realnego D1 z zastosowanymi migracjami, nie tylko mock;
+- testy OAuth: zachowanie refresh tokena i weryfikacja oczekiwanego kanału;
+- testy `/api/check` po nicku i po ID;
+- testy webhooków: podpis, stary timestamp, duplikat, ponowienie po błędzie i zapis prezentów;
+- test migratora na kopii danych z kontrolą źródeł `gift`, `new`, `renewal`;
+- test zgodności endpointów `/ljay-live` i `/preview`.
 
-Tokeny właściciela kanału pozostają w KV pod dotychczasowym kluczem `ljay:tokens`. Nie kopiujemy ich do D1 i nie zmieniamy formatu rekordu. Przy braku zapisanego `config:broadcaster_id` Worker pobiera tożsamość kanału przez istniejący access token (w razie potrzeby odświeża go refresh tokenem), zapisuje ID kanału w KV i inicjalizuje rekord `channels`. Ta ścieżka nie wymaga ponownego OAuth.
-
-D1 jest za bramką `D1_ENABLED`. Domyślna wartość to `false`, więc samo dodanie bindingu nie przełącza odczytów ani zapisów aplikacyjnych na pustą bazę.
-
-### Konfiguracja
-
-1. Utwórz D1: `npx wrangler d1 create kick-sub-checker`.
-2. Wstaw otrzymane `database_id` do `wrangler.toml` w bindingu `DB`.
-3. Zastosuj schemat: `npx wrangler d1 migrations apply kick-sub-checker --remote` (jeśli korzystasz z katalogu migrations, upewnij się, że plik SQL jest w katalogu migracji Wrangler; alternatywnie wykonaj SQL przez `wrangler d1 execute`).
-4. Wdróż Workera z `D1_ENABLED = "false"`.
-5. Wykonaj najpierw dry-run:
-   `curl -X POST 'https://TWOJ-WORKER/api/admin/migrate-kv' -H 'Authorization: Bearer TWÓJ_SEKRET'`
-   Domyślnie endpoint tylko liczy i waliduje rekordy. Nie zapisuje danych biznesowych do D1.
-6. Jeśli raport jest poprawny, wykonaj import:
-   `curl -X POST 'https://TWOJ-WORKER/api/admin/migrate-kv?dry_run=false' -H 'Authorization: Bearer TWÓJ_SEKRET'`
-   Import jest ponawialny. Konflikty i niepoprawne rekordy trafiają do raportu; nie usuwamy źródłowych danych KV.
-7. Zweryfikuj liczbę rekordów i testowe konta, a dopiero potem ustaw `D1_ENABLED = "true"` i wdróż ponownie.
-
-Po przełączeniu Worker obsługuje API bota, powiązania i webhooki przez D1. OAuth state, jednorazowe linki, cache klucza publicznego i tokeny właściciela nadal pozostają w KV. Nie usuwaj KV po cutoverze.
-
-**Ograniczenie migratora:** rekordy powiązań bez `kick_user_id` są pomijane, ponieważ D1 wymaga stabilnego ID zweryfikowanego konta. Migrator nie usuwa ani nie nadpisuje źródłowych kluczy KV. Przed włączeniem D1 trzeba przejrzeć `links_skipped` i `errors`.
+Nie wdrażaj Workera na produkcję ani nie przełączaj `D1_ENABLED` na podstawie samych testów mockowych.
