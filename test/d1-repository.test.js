@@ -171,7 +171,7 @@ test('zachowuje historyczne źródło gift i akceptuje myślnik w nicku', async 
   assert.equal(db.wywolania[0].args[3], 'Nick-Z-Myslnikiem');
 });
 
-test('retencja usuwa wyłącznie stare zakończone webhooki', async () => {
+test('retencja usuwa stare webhooki niezależnie od statusu', async () => {
   const db = utworzFakeD1();
   const repo = utworzRepozytoriumD1(db);
   const usuniete = await repo.oczyscWebhooki({ retentionBeforeMs: Date.now() - 30 * 24 * 60 * 60 * 1000 });
