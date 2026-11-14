@@ -200,7 +200,16 @@ export function utworzRepozytoriumD1(db) {
         VALUES (?, ?, ?, 'processing', ?)
       `).bind(kanal, eventId, eventType, Date.now()).run();
       sprawdzWynik(wynik, 'Rejestracja webhooka');
-      return Number(wynik.meta?.changes || 0) === 1;
+      if (Number(wynik.meta?.changes || 0) === 1) return true;
+
+      // Nieudany event można ponowić; status processing/processed pozostaje chroniony przed duplikatem.
+      const ponowienie = await db.prepare(`
+        UPDATE webhook_events
+        SET status = 'processing', received_at_ms = ?, processed_at_ms = NULL
+        WHERE broadcaster_id = ? AND event_id = ? AND status = 'failed'
+      `).bind(Date.now(), kanal, eventId).run();
+      sprawdzWynik(ponowienie, 'Ponowne przejęcie webhooka');
+      return Number(ponowienie.meta?.changes || 0) === 1;
     },
 
     async zakonczWebhook({ broadcasterId, eventId, subscriptions }) {
