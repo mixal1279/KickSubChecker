@@ -171,6 +171,23 @@ test('zachowuje historyczne źródło gift i akceptuje myślnik w nicku', async 
   assert.equal(db.wywolania[0].args[3], 'Nick-Z-Myslnikiem');
 });
 
+test('retencja usuwa wyłącznie stare zakończone webhooki', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  const usuniete = await repo.oczyscWebhooki({ retentionBeforeMs: Date.now() - 30 * 24 * 60 * 60 * 1000 });
+  assert.equal(usuniete, 1);
+  assert.equal(db.wywolania[0].typ, 'batch');
+  assert.match(db.wywolania[0].polecenia[0].sql, /status IN \('processed', 'failed'\)/);
+  assert.match(db.wywolania[0].polecenia[0].sql, /COALESCE\(processed_at_ms, received_at_ms\)/);
+});
+
+test('retencja odrzuca nieprawidłową granicę czasu', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await assert.rejects(repo.oczyscWebhooki({ retentionBeforeMs: -1 }), /granica retencji/);
+  assert.equal(db.wywolania.length, 0);
+});
+
 test('odrzuca zapytanie o subskrypcję bez nicku i ID', async () => {
   const db = utworzFakeD1();
   const repo = utworzRepozytoriumD1(db);
