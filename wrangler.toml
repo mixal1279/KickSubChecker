@@ -2,6 +2,9 @@ name = "kick-auth"
 main = "index.js"
 compatibility_date = "2026-10-01"
 
+[triggers]
+crons = ["23 3 * * *"] # Retencja webhooków raz dziennie (UTC)
+
 [[kv_namespaces]]
 binding = "SUBS_KV"
 id = "3d5621842e7c4dacb40095ba32311616"
