@@ -280,9 +280,16 @@ async function handleApi(request, env) {
   if (url.pathname === '/api/check') {
     const username = (url.searchParams.get('username') || '').replace(/^@/, '').trim();
     if (!USERNAME_RE.test(username)) return json({ error: 'invalid_username' }, 400);
+    const repo = repozytorium(env);
+    if (repo) {
+      const status = await repo.sprawdzSubskrypcje({ broadcasterId: await pobierzBroadcasterId(env), kickUsername: username });
+      return json({
+        username: status.username || username, status: status.status, subscribed: status.subscribed,
+        expires_at: status.expires_at_ms ? new Date(status.expires_at_ms).toISOString() : null,
+      });
+    }
     const record = await env.SUBS_KV.get(`sub:${username.toLowerCase()}`, 'json');
     const expiry = record ? Date.parse(record.expires_at) : NaN;
-    // Brak rekordu lub niepoprawna data to status nieznany, nie dowód braku subskrypcji.
     if (!record || !Number.isFinite(expiry)) {
       return json({ username: record?.username || username, status: 'unknown', subscribed: null, expires_at: record?.expires_at || null });
     }
@@ -307,10 +314,20 @@ async function handleApi(request, env) {
   if (url.pathname === '/api/link') {
     const discordId = url.searchParams.get('discord_id') || '';
     if (!/^\d{17,20}$/.test(discordId)) return json({ error: 'invalid_discord_id' }, 400);
+    const repo = repozytorium(env);
+    if (repo) {
+      const record = await repo.pobierzPowiazanie({ broadcasterId: await pobierzBroadcasterId(env), discordUserId: discordId });
+      return json({ username: record?.kick_username || null, linked_at: record?.linked_at_ms ? new Date(record.linked_at_ms).toISOString() : null });
+    }
     const record = await env.SUBS_KV.get(`link:discord:${discordId}`, 'json');
     return json({ username: record?.username || null, linked_at: record?.linked_at || null });
   }
   if (url.pathname === '/api/links') {
+    const repo = repozytorium(env);
+    if (repo) {
+      const links = await repo.pobierzPowiazania({ broadcasterId: await pobierzBroadcasterId(env), limit: 1000 });
+      return json({ links: links.map((record) => ({ discord_id: record.discord_user_id, username: record.kick_username })) });
+    }
     const links = []; let cursor;
     do {
       const page = await env.SUBS_KV.list({ prefix: 'link:discord:', cursor, limit: 1000 });
