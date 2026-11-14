@@ -8,7 +8,7 @@ const KICK_PUBLIC_KEY_URL = 'https://api.kick.com/public/v1/public-key';
 const KICK_EVENTS_URL = 'https://api.kick.com/public/v1/events/subscriptions';
 const USERNAME_RE = /^[a-zA-Z0-9_-]{1,25}$/;
 const json = (body, status = 200, extra = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra } });
-const text = (body, status = 200) => new Response(body, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
+const text = (body, status = 200, extra = {}) => new Response(body, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store', ...extra } });
 
 function base64UrlEncode(buffer) {
   const bytes = new Uint8Array(buffer); let binary = '';
