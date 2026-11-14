@@ -126,7 +126,34 @@ test('wyszukiwanie subskrypcji po ID nie wymaga nicku', async () => {
   });
   assert.equal(status.status, 'active');
   assert.equal(status.username, 'Nick-Z-Myslnikiem');
-  assert.deepEqual(db.wywolania[0].args, ['12345', '34567', '34567', null, null, '34567', '34567']);
+  assert.deepEqual(db.wywolania[0].args, ['12345', '34567']);
+  assert.match(db.wywolania[0].sql, /kick_user_id = \?/);
+  assert.doesNotMatch(db.wywolania[0].sql, /kick_username/);
+});
+
+test('brak rekordu po ID nie powoduje fallbacku na nick', async () => {
+  const db = utworzFakeD1({ pierwszy: null });
+  const repo = utworzRepozytoriumD1(db);
+  const status = await repo.sprawdzSubskrypcje({
+    broadcasterId: '12345',
+    kickUserId: '34567',
+    kickUsername: 'Nick-Z-Myslnikiem',
+  });
+  assert.equal(status.status, 'unknown');
+  assert.deepEqual(db.wywolania[0].args, ['12345', '34567']);
+  assert.doesNotMatch(db.wywolania[0].sql, /kick_username/);
+});
+
+test('wyszukiwanie po nicku jest używane tylko bez ID', async () => {
+  const db = utworzFakeD1({ pierwszy: null });
+  const repo = utworzRepozytoriumD1(db);
+  await repo.sprawdzSubskrypcje({
+    broadcasterId: '12345',
+    kickUsername: 'Nick-Z-Myslnikiem',
+  });
+  assert.deepEqual(db.wywolania[0].args, ['12345', 'Nick-Z-Myslnikiem']);
+  assert.match(db.wywolania[0].sql, /kick_username = \?/);
+  assert.doesNotMatch(db.wywolania[0].sql, /kick_user_id = \?/);
 });
 
 test('zachowuje historyczne źródło gift i akceptuje myślnik w nicku', async () => {
