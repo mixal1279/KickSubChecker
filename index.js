@@ -6,7 +6,7 @@ const KICK_TOKEN_URL = 'https://id.kick.com/oauth/token';
 const KICK_USERS_URL = 'https://api.kick.com/public/v1/users';
 const KICK_PUBLIC_KEY_URL = 'https://api.kick.com/public/v1/public-key';
 const KICK_EVENTS_URL = 'https://api.kick.com/public/v1/events/subscriptions';
-const USERNAME_RE = /^[a-zA-Z0-9_]{1,25}$/;
+const USERNAME_RE = /^[a-zA-Z0-9_-]{1,25}$/;
 const json = (body, status = 200, extra = {}) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', ...extra } });
 const text = (body, status = 200) => new Response(body, { status, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Cache-Control': 'no-store' } });
 
@@ -73,19 +73,42 @@ function repozytorium(env, wymus = false) {
 }
 async function pobierzBroadcasterId(env) {
   const configured = String(env.KICK_BROADCASTER_ID || '').trim();
-  if (/^[0-9]{1,32}$/.test(configured)) return configured;
   const stored = await env.SUBS_KV.get('config:broadcaster_id');
-  if (stored && /^[0-9]{1,32}$/.test(stored)) return stored;
-  // Dla istniejącej instalacji odzyskujemy ID kanału z już zapisanych tokenów — bez ponownego OAuth.
+  if (stored && !/^[0-9]{1,32}$/.test(stored)) throw new Error('Zapisany ID kanału Kick jest nieprawidłowy.');
+  if (configured && !/^[0-9]{1,32}$/.test(configured)) throw new Error('KICK_BROADCASTER_ID ma nieprawidłowy format.');
+  if (stored && configured && stored !== configured) {
+    throw new Error('KICK_BROADCASTER_ID nie zgadza się z autoryzowanym kanałem Kick.');
+  }
+  if (stored) return stored;
+
+  // Przy pierwszej konfiguracji potwierdzamy ID przez autoryzowany token właściciela.
   const owner = await kickCurrentUser(await getBroadcasterAccessToken(env));
+  if (configured && configured !== owner.user_id) {
+    throw new Error('Token OAuth należy do innego kanału Kick niż KICK_BROADCASTER_ID.');
+  }
   await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
+  await env.SUBS_KV.put('config:broadcaster_username', owner.username);
   const repo = repozytorium(env);
   if (repo) await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
   return owner.user_id;
 }
 async function saveTokens(env, tokens) {
-  if (!tokens?.access_token || !tokens?.refresh_token || !Number.isFinite(Number(tokens.expires_in))) throw new Error('Kick OAuth zwrócił niekompletne tokeny.');
-  await env.SUBS_KV.put('ljay:tokens', JSON.stringify({ access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_at: Date.now() + Number(tokens.expires_in) * 1000 }));
+  const expiresIn = Number(tokens?.expires_in);
+  if (typeof tokens?.access_token !== 'string' || !tokens.access_token || !Number.isFinite(expiresIn) || expiresIn <= 0) {
+    throw new Error('Kick OAuth zwrócił niekompletne tokeny.');
+  }
+  const previous = await env.SUBS_KV.get('ljay:tokens', 'json');
+  const refreshToken = typeof tokens.refresh_token === 'string' && tokens.refresh_token
+    ? tokens.refresh_token
+    : previous?.refresh_token;
+  if (typeof refreshToken !== 'string' || !refreshToken) {
+    throw new Error('Brak refresh_token w odpowiedzi Kicka i w zapisanych danych.');
+  }
+  await env.SUBS_KV.put('ljay:tokens', JSON.stringify({
+    access_token: tokens.access_token,
+    refresh_token: refreshToken,
+    expires_at: Date.now() + expiresIn * 1000,
+  }));
 }
 async function getBroadcasterAccessToken(env) {
   const raw = await env.SUBS_KV.get('ljay:tokens', 'json');
@@ -166,9 +189,13 @@ async function handleCallback(request, env) {
   if (!pending.owner) return text('Nieprawidłowy przepływ OAuth. Uruchom autoryzację ponownie.', 400);
   try {
     // Zachowujemy istniejące klucze tokenów w KV — migracja D1 nie wymaga ponownego OAuth.
-    await saveTokens(env, tokens);
     const owner = await kickCurrentUser(tokens.access_token);
+    if (pending.expected_username && owner.username.toLowerCase() !== pending.expected_username) {
+      return text('Autoryzowane konto Kick nie jest oczekiwanym kanałem.', 403);
+    }
+    await saveTokens(env, tokens);
     await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
+    await env.SUBS_KV.put('config:broadcaster_username', owner.username);
     const repo = repozytorium(env);
     if (repo) await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
   } catch (error) {
@@ -266,16 +293,20 @@ async function saveSubscription(env, subscription) {
   const username = subscription.username.trim();
   const key = `sub:${username.toLowerCase()}`;
   const old = await env.SUBS_KV.get(key, 'json');
+  const expiry = Date.parse(subscription.expires_at);
+  if (!Number.isFinite(expiry)) throw new TypeError('Nieprawidłowa data wygaśnięcia subskrypcji.');
+  const userId = String(subscription.user_id ?? old?.user_id ?? '');
   const record = {
-    user_id: String(subscription.user_id ?? ''),
+    user_id: /^[0-9]{1,32}$/.test(userId) ? userId : '',
     username,
     expires_at: subscription.expires_at,
     source: subscription.source,
     updated_at: new Date().toISOString(),
   };
-  // Eventy mogą dotrzeć poza kolejnością; nie cofamy późniejszej daty wygaśnięcia.
-  if (!old || !Number.isFinite(Date.parse(old.expires_at)) || Date.parse(record.expires_at) >= Date.parse(old.expires_at)) {
+  // Nie pozwalamy starszemu eventowi cofnąć nowszej subskrypcji.
+  if (!old || !Number.isFinite(Date.parse(old.expires_at)) || expiry >= Date.parse(old.expires_at)) {
     await env.SUBS_KV.put(key, JSON.stringify(record));
+    if (record.user_id) await env.SUBS_KV.put(`sub:user_id:${record.user_id}`, JSON.stringify(record));
   }
 }
 
@@ -284,22 +315,35 @@ async function handleApi(request, env) {
   const url = new URL(request.url);
   if (url.pathname === '/api/check') {
     const username = (url.searchParams.get('username') || '').replace(/^@/, '').trim();
-    if (!USERNAME_RE.test(username)) return json({ error: 'invalid_username' }, 400);
+    const userId = (url.searchParams.get('user_id') || '').trim();
+    if (userId && !/^[0-9]{1,32}$/.test(userId)) return json({ error: 'invalid_user_id' }, 400);
+    if (!userId && !USERNAME_RE.test(username)) return json({ error: 'invalid_username' }, 400);
+    if (username && !USERNAME_RE.test(username)) return json({ error: 'invalid_username' }, 400);
+
     const repo = repozytorium(env);
     if (repo) {
-      const status = await repo.sprawdzSubskrypcje({ broadcasterId: await pobierzBroadcasterId(env), kickUsername: username });
+      const status = await repo.sprawdzSubskrypcje({
+        broadcasterId: await pobierzBroadcasterId(env),
+        kickUserId: userId || null,
+        kickUsername: username || null,
+      });
       return json({
-        username: status.username || username, status: status.status, subscribed: status.subscribed,
+        username: status.username || username || null, status: status.status, subscribed: status.subscribed,
         expires_at: status.expires_at_ms ? new Date(status.expires_at_ms).toISOString() : null,
       });
     }
-    const record = await env.SUBS_KV.get(`sub:${username.toLowerCase()}`, 'json');
+
+    let record = userId ? await env.SUBS_KV.get(`sub:user_id:${userId}`, 'json') : null;
+    if (!record && username) {
+      const byName = await env.SUBS_KV.get(`sub:${username.toLowerCase()}`, 'json');
+      if (!userId || (byName && String(byName.user_id || '') === userId)) record = byName;
+    }
     const expiry = record ? Date.parse(record.expires_at) : NaN;
     if (!record || !Number.isFinite(expiry)) {
-      return json({ username: record?.username || username, status: 'unknown', subscribed: null, expires_at: record?.expires_at || null });
+      return json({ username: record?.username || username || null, status: 'unknown', subscribed: null, expires_at: record?.expires_at || null });
     }
     const subscribed = expiry > Date.now();
-    return json({ username: record.username || username, status: subscribed ? 'active' : 'inactive', subscribed, expires_at: record.expires_at });
+    return json({ username: record.username || username || null, status: subscribed ? 'active' : 'inactive', subscribed, expires_at: record.expires_at });
   }
   if (url.pathname === '/api/owner/start') {
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
@@ -322,10 +366,10 @@ async function handleApi(request, env) {
     const repo = repozytorium(env);
     if (repo) {
       const record = await repo.pobierzPowiazanie({ broadcasterId: await pobierzBroadcasterId(env), discordUserId: discordId });
-      return json({ username: record?.kick_username || null, linked_at: record?.linked_at_ms ? new Date(record.linked_at_ms).toISOString() : null });
+      return json({ username: record?.kick_username || null, kick_user_id: record?.kick_user_id || null, linked_at: record?.linked_at_ms ? new Date(record.linked_at_ms).toISOString() : null });
     }
     const record = await env.SUBS_KV.get(`link:discord:${discordId}`, 'json');
-    return json({ username: record?.username || null, linked_at: record?.linked_at || null });
+    return json({ username: record?.username || null, kick_user_id: record?.kick_user_id || null, linked_at: record?.linked_at || null });
   }
   if (url.pathname === '/api/admin/migrate-kv') {
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
@@ -371,6 +415,7 @@ async function handleApi(request, env) {
     do {
       const page = await env.SUBS_KV.list({ prefix: 'sub:', cursor, limit: 500 });
       for (const key of page.keys) {
+        if (key.name.startsWith('sub:user_id:')) continue; // Importujemy rekordy kanoniczne, nie indeksy pomocnicze.
         raport.subscriptions_seen++;
         const record = await env.SUBS_KV.get(key.name, 'json');
         const expiry = Date.parse(record?.expires_at || '');
@@ -387,7 +432,7 @@ async function handleApi(request, env) {
               kickUserId: record.user_id ? String(record.user_id) : null,
               kickUsername: username,
               expiresAtMs: expiry,
-              source: ['channel.subscription.new', 'channel.subscription.renewal', 'channel.subscription.gifts', 'admin'].includes(record.source) ? record.source : 'admin',
+              source: ['channel.subscription.new', 'channel.subscription.renewal', 'channel.subscription.gifts', 'gift', 'new', 'renewal', 'admin'].includes(record.source) ? record.source : 'admin',
             });
             raport.subscriptions_imported++;
           } catch (error) {
@@ -407,7 +452,7 @@ async function handleApi(request, env) {
       let offset = 0;
       while (true) {
         const page = await repo.pobierzPowiazania({ broadcasterId, limit: 1000, offset });
-        links.push(...page.map((record) => ({ discord_id: record.discord_user_id, username: record.kick_username })));
+        links.push(...page.map((record) => ({ discord_id: record.discord_user_id, username: record.kick_username, kick_user_id: record.kick_user_id })));
         if (page.length < 1000) break;
         offset += page.length;
       }
@@ -418,7 +463,7 @@ async function handleApi(request, env) {
       const page = await env.SUBS_KV.list({ prefix: 'link:discord:', cursor, limit: 1000 });
       for (const key of page.keys) {
         const record = await env.SUBS_KV.get(key.name, 'json');
-        if (record?.discord_id && record?.username) links.push({ discord_id: record.discord_id, username: record.username });
+        if (record?.discord_id && record?.username) links.push({ discord_id: record.discord_id, username: record.username, kick_user_id: record.kick_user_id || null });
       }
       cursor = page.list_complete ? undefined : page.cursor;
     } while (cursor);
@@ -426,10 +471,48 @@ async function handleApi(request, env) {
   }
   return json({ error: 'not_found' }, 404);
 }
+function previewPage() {
+  return `<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>KickSubChecker — podgląd</title>
+  <style>
+    :root{color-scheme:dark;font-family:system-ui,sans-serif;background:#101114;color:#f3f4f6}
+    body{min-height:100vh;margin:0;display:grid;place-items:center;padding:24px;box-sizing:border-box}
+    main{width:min(560px,100%);padding:32px;border:1px solid #34363d;border-radius:18px;background:#191b20}
+    h1{margin:0 0 12px;font-size:1.7rem}p{line-height:1.6;color:#c4c7cf}
+    a{color:#a5b4fc}small{color:#8b909b}
+  </style>
+</head>
+<body><main><h1>KickSubChecker</h1><p>Podgląd integracji subskrypcji Kick z Discordem.</p><p>Autoryzacja konta widza odbywa się wyłącznie przez komendę <strong>/polacz-konto</strong> na skonfigurowanym serwerze Discord.</p><small>Ta strona nie wyświetla ani nie modyfikuje danych subskrybentów.</small></main></body>
+</html>`;
+}
+
+async function handleLjayLive(request, env) {
+  if (request.method !== 'GET') return text('Method Not Allowed', 405, { Allow: 'GET' });
+  const verifier = randomString(64);
+  const challenge = base64UrlEncode(await sha256(verifier));
+  const state = randomString(24);
+  await env.SUBS_KV.put(`oauth:state:${state}`, JSON.stringify({
+    verifier, discord_id: null, owner: true, expected_username: 'ljaylive', created_at: Date.now(),
+  }), { expirationTtl: 600 });
+  const params = new URLSearchParams({
+    response_type: 'code', client_id: env.KICK_CLIENT_ID, redirect_uri: env.REDIRECT_URI,
+    scope: 'user:read channel:read events:subscribe', code_challenge: challenge,
+    code_challenge_method: 'S256', state,
+  });
+  return Response.redirect(`${KICK_AUTHORIZE_URL}?${params}`, 302);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
+      if (url.pathname === '/ljay-live' || url.pathname === '/ljay-live/start') return handleLjayLive(request, env);
+      if (url.pathname === '/preview') return new Response(previewPage(), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'" } });
       if (url.pathname === '/authorize') return handleAuthorize(request, env);
       if (url.pathname === '/callback') return handleCallback(request, env);
       if (url.pathname === '/webhook') return handleWebhook(request, env);
