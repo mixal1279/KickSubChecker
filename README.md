@@ -67,3 +67,17 @@ Projekt ma dwie osobne części: `KickSubChecker.js` to bot Discord (Node.js), a
 - Bot nie wykonuje automatycznego sprzątania ról osobom bez połączonego konta Kick. Takie role nie są zdejmowane tylko dlatego, że użytkownik nie ma powiązania OAuth.
 - Po wdrożeniu sprawdź testowym kontem, czy Kick wysyła webhooki do ustawionego adresu oraz czy odpowiedź rejestracji eventów jest sukcesem. Nie da się potwierdzić rzeczywistego działania integracji bez Twoich sekretów, konfiguracji Kick Developer i uprawnień serwera.
 - Nie commituj `.env`, tokenów OAuth ani sekretów. Jeśli wcześniejsze sekrety były publiczne, wygeneruj nowe.
+
+
+## Backend v2: Cloudflare D1 bez ponownego OAuth
+
+Backend v2 może przejąć powiązania, subskrypcje i webhooki w D1, ale tokeny właściciela kanału nadal są przechowywane w KV pod istniejącym kluczem `ljay:tokens`. Worker potrafi odczytać tożsamość kanału z obecnego tokenu i odświeżyć go standardowym refresh tokenem. **Samo przełączenie bazy nie wymaga ponownej autoryzacji Kick.**
+
+Szczegółowa, bezpieczna procedura znajduje się w [docs/backend-v2-migration.md](docs/backend-v2-migration.md). Najważniejsze:
+- skonfiguruj binding D1 (`DB`) i zastosuj `migrations/0001_backend_v2.sql`;
+- pozostaw `D1_ENABLED = "false"`;
+- wykonaj dry-run endpointu `POST /api/admin/migrate-kv`;
+- po analizie raportu wykonaj import z `?dry_run=false`;
+- dopiero po weryfikacji ustaw `D1_ENABLED = "true"`.
+
+Nie usuwaj KV po przełączeniu — nadal przechowuje tokeny OAuth, stan PKCE, jednorazowe linki i cache klucza publicznego. Endpoint migracyjny wymaga tego samego Bearer secret co API bota.
