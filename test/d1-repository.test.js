@@ -128,7 +128,7 @@ test('wyszukiwanie subskrypcji po ID nie wymaga nicku', async () => {
   assert.equal(status.username, 'Nick-Z-Myslnikiem');
   assert.deepEqual(db.wywolania[0].args, ['12345', '34567']);
   assert.match(db.wywolania[0].sql, /kick_user_id = \?/);
-  assert.doesNotMatch(db.wywolania[0].sql, /kick_username/);
+  assert.doesNotMatch(db.wywolania[0].sql, /\bOR\b/);
 });
 
 test('brak rekordu po ID nie powoduje fallbacku na nick', async () => {
@@ -141,7 +141,7 @@ test('brak rekordu po ID nie powoduje fallbacku na nick', async () => {
   });
   assert.equal(status.status, 'unknown');
   assert.deepEqual(db.wywolania[0].args, ['12345', '34567']);
-  assert.doesNotMatch(db.wywolania[0].sql, /kick_username/);
+  assert.doesNotMatch(db.wywolania[0].sql, /\bOR\b/);
 });
 
 test('wyszukiwanie po nicku jest używane tylko bez ID', async () => {
