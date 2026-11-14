@@ -21,7 +21,7 @@ Zmiana zachowuje endpointy:
 
 `/api/check` obsługuje zarówno `username`, jak i `user_id`. Odczyt po ID ma pierwszeństwo, a odpowiedź zachowuje format statusu `active`, `inactive` lub `unknown`. KV utrzymuje indeksy `sub:<username>` i `sub:user_id:<id>`.
 
-Odświeżanie OAuth zachowuje poprzedni refresh token, jeśli Kick nie zwróci nowego. Przy pierwszym ustaleniu kanału Worker potwierdza ID przez autoryzowany endpoint Kick; skonfigurowany `KICK_BROADCASTER_ID` nie może wskazywać innego konta.
+Odświeżanie OAuth zachowuje poprzedni refresh token, jeśli Kick nie zwróci nowego. Przy pierwszym ustaleniu kanału Worker potwierdza ID przez autoryzowany endpoint Kick. Callback właściciela nie zapisze tokenów ani konfiguracji, jeśli ID autoryzowanego konta różni się od istniejącego `config:broadcaster_id` lub `KICK_BROADCASTER_ID`. Zmiana kanału wymaga osobnej procedury.
 
 ## Migracje SQL
 
@@ -50,6 +50,7 @@ Endpoint migracyjny wymaga Bearer secret bota. Nie umieszczaj sekretu w repozyto
 - testy `/api/check` po nicku i po ID;
 - testy webhooków: podpis, stary timestamp, duplikat, ponowienie po błędzie i zapis prezentów;
 - test migratora na kopii danych z kontrolą źródeł `gift`, `new`, `renewal`;
+- retencja D1 usuwa zakończone rekordy webhooków starsze niż 30 dni raz dziennie; ponowienie zdarzenia `failed` lub porzuconego `processing` nadal zależy od ponownej dostawy webhooka przez Kick (Worker nie przechowuje surowego payloadu do samodzielnego odtworzenia);
 - test zgodności endpointów `/ljay-live` i `/preview`.
 
 Nie wdrażaj Workera na produkcję ani nie przełączaj `D1_ENABLED` na podstawie samych testów mockowych.
