@@ -188,38 +188,71 @@ async function handleWebhook(request, env) {
   if (rawBody.length > 256_000) return text('Payload Too Large', 413);
   const verification = await verifyWebhookSignature(env, request.headers, rawBody);
   if (!verification || verification.valid !== true) return text('Invalid signature or stale event', 401);
-  const seenKey = `webhook:seen:${verification.id}`;
-  if (await env.SUBS_KV.get(seenKey)) return text('Duplicate event', 200);
 
   let payload;
   try { payload = JSON.parse(rawBody); } catch { return text('Invalid JSON', 400); }
-  const eventType = request.headers.get('Kick-Event-Type');
-  const validExpiry = typeof payload?.expires_at === 'string' && Number.isFinite(Date.parse(payload.expires_at));
-  const expiryIso = validExpiry ? new Date(payload.expires_at).toISOString() : null;
+  const eventType = request.headers.get('Kick-Event-Type') || 'unknown';
+  const repo = repozytorium(env);
+  const broadcasterId = repo ? await pobierzBroadcasterId(env) : null;
+  const seenKey = `webhook:seen:${verification.id}`;
 
-  if (eventType === 'channel.subscription.new' || eventType === 'channel.subscription.renewal') {
-    const subscriber = payload?.subscriber;
-    const username = subscriber?.username;
-    if (typeof username !== 'string' || !USERNAME_RE.test(username) || !validExpiry) {
-      return text('Invalid subscription payload', 400);
-    }
-    await saveSubscription(env, { username, user_id: subscriber.user_id, expires_at: expiryIso, source: eventType });
-  } else if (eventType === 'channel.subscription.gifts') {
-    // Kick wysyła jedno expires_at wspólne dla listy giftees. Każdy odbiorca
-    // otrzymuje własny rekord, aby bot mógł nadać mu rolę po połączeniu konta.
-    const giftees = payload?.giftees;
-    if (!Array.isArray(giftees) || !giftees.length || !validExpiry) {
-      return text('Invalid gifted subscription payload', 400);
-    }
-    for (const giftee of giftees) {
-      const username = giftee?.username;
-      if (typeof username !== 'string' || !USERNAME_RE.test(username)) continue;
-      await saveSubscription(env, { username, user_id: giftee.user_id, expires_at: expiryIso, source: eventType });
+  if (repo) {
+    const przejety = await repo.przejmijWebhook({ broadcasterId, eventId: verification.id, eventType });
+    if (!przejety) return text('Duplicate event', 200);
+    try {
+      const subscriptions = [];
+      const validExpiry = typeof payload?.expires_at === 'string' && Number.isFinite(Date.parse(payload.expires_at));
+      const expiresAtMs = validExpiry ? Date.parse(payload.expires_at) : null;
+      if (eventType === 'channel.subscription.new' || eventType === 'channel.subscription.renewal') {
+        const subscriber = payload?.subscriber;
+        if (!subscriber || typeof subscriber.username !== 'string' || !USERNAME_RE.test(subscriber.username) || !validExpiry) {
+          throw new Error('Invalid subscription payload');
+        }
+        subscriptions.push({
+          kickUserId: subscriber.user_id == null ? null : String(subscriber.user_id),
+          kickUsername: subscriber.username, expiresAtMs, source: eventType,
+        });
+      } else if (eventType === 'channel.subscription.gifts') {
+        const giftees = payload?.giftees;
+        if (!Array.isArray(giftees) || !giftees.length || !validExpiry || giftees.length > 500) {
+          throw new Error('Invalid gifted subscription payload');
+        }
+        for (const giftee of giftees) {
+          if (typeof giftee?.username !== 'string' || !USERNAME_RE.test(giftee.username)) continue;
+          subscriptions.push({
+            kickUserId: giftee.user_id == null ? null : String(giftee.user_id),
+            kickUsername: giftee.username, expiresAtMs, source: eventType,
+          });
+        }
+      }
+      await repo.zakonczWebhook({ broadcasterId, eventId: verification.id, subscriptions });
+      return text('OK');
+    } catch (error) {
+      await repo.oznaczWebhookNieudany({ broadcasterId, eventId: verification.id }).catch((markError) => {
+        console.error('Nie udało się oznaczyć webhooka jako failed:', markError.message);
+      });
+      console.error('Błąd przetwarzania webhooka D1:', error.message);
+      return text('Webhook processing failed', 500);
     }
   }
 
-  // Nieoznaczenie eventu po błędzie przetwarzania pozwala Kick ponowić dostawę.
-  // TTL chroni przed powtórnym przetwarzaniem w oknie możliwego replayu.
+  if (await env.SUBS_KV.get(seenKey)) return text('Duplicate event', 200);
+  const validExpiry = typeof payload?.expires_at === 'string' && Number.isFinite(Date.parse(payload.expires_at));
+  const expiryIso = validExpiry ? new Date(payload.expires_at).toISOString() : null;
+  if (eventType === 'channel.subscription.new' || eventType === 'channel.subscription.renewal') {
+    const subscriber = payload?.subscriber;
+    if (typeof subscriber?.username !== 'string' || !USERNAME_RE.test(subscriber.username) || !validExpiry) {
+      return text('Invalid subscription payload', 400);
+    }
+    await saveSubscription(env, { username: subscriber.username, user_id: subscriber.user_id, expires_at: expiryIso, source: eventType });
+  } else if (eventType === 'channel.subscription.gifts') {
+    const giftees = payload?.giftees;
+    if (!Array.isArray(giftees) || !giftees.length || !validExpiry) return text('Invalid gifted subscription payload', 400);
+    for (const giftee of giftees) {
+      if (typeof giftee?.username !== 'string' || !USERNAME_RE.test(giftee.username)) continue;
+      await saveSubscription(env, { username: giftee.username, user_id: giftee.user_id, expires_at: expiryIso, source: eventType });
+    }
+  }
   await env.SUBS_KV.put(seenKey, '1', { expirationTtl: 86400 });
   return text('OK');
 }
