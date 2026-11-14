@@ -1,4 +1,6 @@
 /** Kick Sub Checker — Cloudflare Worker. */
+import { utworzRepozytoriumD1 } from './d1-repository.js';
+
 const KICK_AUTHORIZE_URL = 'https://id.kick.com/oauth/authorize';
 const KICK_TOKEN_URL = 'https://id.kick.com/oauth/token';
 const KICK_USERS_URL = 'https://api.kick.com/public/v1/users';
@@ -65,6 +67,16 @@ async function verifyWebhookSignature(env, headers, rawBody) {
     // Dzięki temu błąd zapisu nie blokuje ponownej dostawy tego samego webhooka.
     return { valid: true, id };
   } catch (error) { console.error('Weryfikacja webhooka nie powiodła się:', error.message); return false; }
+}
+function repozytorium(env) {
+  return env.DB ? utworzRepozytoriumD1(env.DB) : null;
+}
+async function pobierzBroadcasterId(env) {
+  const configured = String(env.KICK_BROADCASTER_ID || '').trim();
+  if (/^[0-9]{1,32}$/.test(configured)) return configured;
+  const stored = await env.SUBS_KV.get('config:broadcaster_id');
+  if (stored && /^[0-9]{1,32}$/.test(stored)) return stored;
+  throw new Error('Brak KICK_BROADCASTER_ID. Wykonaj autoryzację właściciela kanału.');
 }
 async function saveTokens(env, tokens) {
   if (!tokens?.access_token || !tokens?.refresh_token || !Number.isFinite(Number(tokens.expires_in))) throw new Error('Kick OAuth zwrócił niekompletne tokeny.');
@@ -133,9 +145,18 @@ async function handleCallback(request, env) {
     } catch (error) { console.error('Błąd łączenia konta Kick:', error.message); return text('Nie udało się zweryfikować konta Kick. Spróbuj ponownie.', 502); }
   }
   if (!pending.owner) return text('Nieprawidłowy przepływ OAuth. Uruchom autoryzację ponownie.', 400);
-  try { await saveTokens(env, tokens); }
-  catch (error) { console.error(error.message); return text('Kick autoryzował aplikację, ale zapis tokenów się nie powiódł.', 500); }
-  return text('Autoryzacja właściciela kanału zakończona. Administrator może teraz zarejestrować webhooki.');
+  try {
+    // Zachowujemy istniejące klucze tokenów w KV — migracja D1 nie wymaga ponownego OAuth.
+    await saveTokens(env, tokens);
+    const owner = await kickCurrentUser(tokens.access_token);
+    await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
+    const repo = repozytorium(env);
+    if (repo) await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
+  } catch (error) {
+    console.error('Zapis autoryzacji właściciela:', error.message);
+    return text('Kick autoryzował aplikację, ale zapis konfiguracji kanału się nie powiódł. Tokeny pozostają w KV; ponów próbę konfiguracji bez ponownego OAuth.', 500);
+  }
+  return text('Autoryzacja właściciela kanału zakończona. Tokeny pozostają w KV. Administrator może teraz zarejestrować webhooki.');
 }
 async function handleRegisterEvents(request, env) {
   if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
