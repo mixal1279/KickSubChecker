@@ -279,5 +279,21 @@ export function utworzRepozytoriumD1(db) {
       `).bind(wymagajId(broadcasterId, 'ID kanału Kick'), eventId).run();
       sprawdzWynik(wynik, 'Oznaczenie błędnego webhooka');
     },
+
+    async oczyscWebhooki({ retentionBeforeMs }) {
+      const granica = Number(retentionBeforeMs);
+      if (!Number.isSafeInteger(granica) || granica <= 0) {
+        throw new TypeError('Nieprawidłowa granica retencji webhooków.');
+      }
+      const wyniki = await db.batch([
+        db.prepare(`
+          DELETE FROM webhook_events
+          WHERE status IN ('processed', 'failed')
+            AND COALESCE(processed_at_ms, received_at_ms) < ?
+        `).bind(granica),
+      ]);
+      wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Czyszczenie webhooków (operacja ${i + 1})`));
+      return Number(wyniki[0]?.meta?.changes || 0);
+    },
   };
 }
