@@ -13,3 +13,9 @@ REDIRECT_URI = "https://REPLACE_WITH_WORKER_HOST/callback" # MUST be replaced be
 # npx wrangler secret put KICK_CLIENT_ID
 # npx wrangler secret put KICK_CLIENT_SECRET
 # npx wrangler secret put BOT_API_SECRET
+
+# D1 is enabled only after creating the database and replacing the placeholders.
+[[d1_databases]]
+binding = "DB"
+database_name = "kick-sub-checker"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
