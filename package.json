@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node KickSubChecker.js",
     "check": "node --check KickSubChecker.js && node --check index.js && node --check d1-repository.js && node --check register-events-once.js && node --check test/d1-repository.test.js",
-    "test": "node --experimental-default-type=module --test"
+    "test": "node --test"
   },
   "dependencies": {
     "discord.js": "^14.16.3",
