@@ -47,3 +47,28 @@ Plik `d1-repository.js` udostępnia repozytorium bez zależności zewnętrznych:
 Łączenie kont używa D1 batch: usunięcie poprzedniego powiązania Discord i wstawienie nowego wraz z audytem są jedną operacją transakcyjną. Konflikt unikalnego ID Kick powoduje wycofanie całej paczki. Webhook otrzymuje atomowy claim przez `INSERT OR IGNORE`; ponowne przejęcie jest możliwe po błędzie lub po 5 minutach bezczynnego statusu `processing`. Zapisy subskrypcji są ograniczone do eventu w stanie `processing`, a data wygaśnięcia nigdy nie jest cofana.
 
 Testy adaptera znajdują się w `test/d1-repository.test.js`. Adapter nie jest jeszcze podłączony do routingu Workera — aktualny kod nadal korzysta z KV. Przed przełączeniem trzeba dodać konfigurację bindingu D1, przepiąć endpointy i webhook, a następnie wykonać migrator KV → D1.
+
+
+## Zachowanie OAuth i przełączenie Workera
+
+Tokeny właściciela kanału pozostają w KV pod dotychczasowym kluczem `ljay:tokens`. Nie kopiujemy ich do D1 i nie zmieniamy formatu rekordu. Przy braku zapisanego `config:broadcaster_id` Worker pobiera tożsamość kanału przez istniejący access token (w razie potrzeby odświeża go refresh tokenem), zapisuje ID kanału w KV i inicjalizuje rekord `channels`. Ta ścieżka nie wymaga ponownego OAuth.
+
+D1 jest za bramką `D1_ENABLED`. Domyślna wartość to `false`, więc samo dodanie bindingu nie przełącza odczytów ani zapisów aplikacyjnych na pustą bazę.
+
+### Konfiguracja
+
+1. Utwórz D1: `npx wrangler d1 create kick-sub-checker`.
+2. Wstaw otrzymane `database_id` do `wrangler.toml` w bindingu `DB`.
+3. Zastosuj schemat: `npx wrangler d1 migrations apply kick-sub-checker --remote` (jeśli korzystasz z katalogu migrations, upewnij się, że plik SQL jest w katalogu migracji Wrangler; alternatywnie wykonaj SQL przez `wrangler d1 execute`).
+4. Wdróż Workera z `D1_ENABLED = "false"`.
+5. Wykonaj najpierw dry-run:
+   `curl -X POST 'https://TWOJ-WORKER/api/admin/migrate-kv' -H 'Authorization: Bearer TWÓJ_SEKRET'`
+   Domyślnie endpoint tylko liczy i waliduje rekordy. Nie zapisuje danych biznesowych do D1.
+6. Jeśli raport jest poprawny, wykonaj import:
+   `curl -X POST 'https://TWOJ-WORKER/api/admin/migrate-kv?dry_run=false' -H 'Authorization: Bearer TWÓJ_SEKRET'`
+   Import jest ponawialny. Konflikty i niepoprawne rekordy trafiają do raportu; nie usuwamy źródłowych danych KV.
+7. Zweryfikuj liczbę rekordów i testowe konta, a dopiero potem ustaw `D1_ENABLED = "true"` i wdróż ponownie.
+
+Po przełączeniu Worker obsługuje API bota, powiązania i webhooki przez D1. OAuth state, jednorazowe linki, cache klucza publicznego i tokeny właściciela nadal pozostają w KV. Nie usuwaj KV po cutoverze.
+
+**Ograniczenie migratora:** rekordy powiązań bez `kick_user_id` są pomijane, ponieważ D1 wymaga stabilnego ID zweryfikowanego konta. Migrator nie usuwa ani nie nadpisuje źródłowych kluczy KV. Przed włączeniem D1 trzeba przejrzeć `links_skipped` i `errors`.
