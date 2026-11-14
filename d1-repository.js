@@ -288,8 +288,7 @@ export function utworzRepozytoriumD1(db) {
       const wyniki = await db.batch([
         db.prepare(`
           DELETE FROM webhook_events
-          WHERE status IN ('processed', 'failed')
-            AND COALESCE(processed_at_ms, received_at_ms) < ?
+          WHERE COALESCE(processed_at_ms, received_at_ms) < ?
         `).bind(granica),
       ]);
       wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Czyszczenie webhooków (operacja ${i + 1})`));
