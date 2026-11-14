@@ -76,7 +76,12 @@ async function pobierzBroadcasterId(env) {
   if (/^[0-9]{1,32}$/.test(configured)) return configured;
   const stored = await env.SUBS_KV.get('config:broadcaster_id');
   if (stored && /^[0-9]{1,32}$/.test(stored)) return stored;
-  throw new Error('Brak KICK_BROADCASTER_ID. Wykonaj autoryzację właściciela kanału.');
+  // Dla istniejącej instalacji odzyskujemy ID kanału z już zapisanych tokenów — bez ponownego OAuth.
+  const owner = await kickCurrentUser(await getBroadcasterAccessToken(env));
+  await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
+  const repo = repozytorium(env);
+  if (repo) await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
+  return owner.user_id;
 }
 async function saveTokens(env, tokens) {
   if (!tokens?.access_token || !tokens?.refresh_token || !Number.isFinite(Number(tokens.expires_in))) throw new Error('Kick OAuth zwrócił niekompletne tokeny.');
@@ -393,8 +398,16 @@ async function handleApi(request, env) {
   if (url.pathname === '/api/links') {
     const repo = repozytorium(env);
     if (repo) {
-      const links = await repo.pobierzPowiazania({ broadcasterId: await pobierzBroadcasterId(env), limit: 1000 });
-      return json({ links: links.map((record) => ({ discord_id: record.discord_user_id, username: record.kick_username })) });
+      const broadcasterId = await pobierzBroadcasterId(env);
+      const links = [];
+      let offset = 0;
+      while (true) {
+        const page = await repo.pobierzPowiazania({ broadcasterId, limit: 1000, offset });
+        links.push(...page.map((record) => ({ discord_id: record.discord_user_id, username: record.kick_username })));
+        if (page.length < 1000) break;
+        offset += page.length;
+      }
+      return json({ links });
     }
     const links = []; let cursor;
     do {
