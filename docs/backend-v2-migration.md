@@ -50,7 +50,7 @@ Endpoint migracyjny wymaga Bearer secret bota. Nie umieszczaj sekretu w repozyto
 - testy `/api/check` po nicku i po ID;
 - testy webhooków: podpis, stary timestamp, duplikat, ponowienie po błędzie i zapis prezentów;
 - test migratora na kopii danych z kontrolą źródeł `gift`, `new`, `renewal`;
-- retencja D1 usuwa zakończone rekordy webhooków starsze niż 30 dni raz dziennie; ponowienie zdarzenia `failed` lub porzuconego `processing` nadal zależy od ponownej dostawy webhooka przez Kick (Worker nie przechowuje surowego payloadu do samodzielnego odtworzenia);
+- retencja D1 usuwa rekordy webhooków starsze niż 30 dni (również porzucone `processing`) raz dziennie; ponowienie zdarzenia `failed` lub porzuconego `processing` nadal zależy od ponownej dostawy webhooka przez Kick (Worker nie przechowuje surowego payloadu do samodzielnego odtworzenia);
 - test zgodności endpointów `/ljay-live` i `/preview`.
 
 Nie wdrażaj Workera na produkcję ani nie przełączaj `D1_ENABLED` na podstawie samych testów mockowych.
