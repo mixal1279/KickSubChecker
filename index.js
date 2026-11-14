@@ -54,7 +54,7 @@ async function verifyWebhookSignature(env, headers, rawBody) {
   const id = headers.get('Kick-Event-Message-Id');
   const timestamp = headers.get('Kick-Event-Message-Timestamp');
   const encodedSignature = headers.get('Kick-Event-Signature');
-  if (!id || !timestamp || !encodedSignature) return false;
+  if (!id || !/^[A-Za-z0-9._:-]{1,200}$/.test(id) || !timestamp || !encodedSignature) return false;
   const eventTime = Date.parse(timestamp);
   if (!Number.isFinite(eventTime) || Math.abs(Date.now() - eventTime) > 5 * 60 * 1000) return false;
   try {
@@ -149,8 +149,11 @@ async function handleAuthorize(request, env) {
   return Response.redirect(`${KICK_AUTHORIZE_URL}?${params}`, 302);
 }
 async function handleCallback(request, env) {
-  const url = new URL(request.url); const code = url.searchParams.get('code'); const state = url.searchParams.get('state');
-  if (!code || !state) return text('Brak kodu OAuth lub parametru state.', 400);
+  const url = new URL(request.url);
+  if (url.searchParams.has('error')) return text('Logowanie Kick zostało anulowane lub odrzucone. Uruchom autoryzację ponownie.', 400);
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  if (!code || !state || state.length > 200) return text('Brak kodu OAuth lub nieprawidłowy parametr state.', 400);
   const stateKey = `oauth:state:${state}`; const pending = await env.SUBS_KV.get(stateKey, 'json');
   if (!pending || Date.now() - pending.created_at > 10 * 60 * 1000) return text('Link wygasł lub jest nieprawidłowy. Uruchom łączenie kont ponownie.', 400);
   await env.SUBS_KV.delete(stateKey);
