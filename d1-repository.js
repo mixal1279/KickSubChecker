@@ -180,15 +180,24 @@ export function utworzRepozytoriumD1(db) {
       const kickId = kickUserId == null || kickUserId === '' ? null : wymagajId(kickUserId, 'ID użytkownika Kick');
       const nick = kickUsername == null || kickUsername === '' ? null : normalizujNick(kickUsername);
       if (!kickId && !nick) throw new TypeError('Podaj ID lub nick użytkownika Kick.');
-      const rekord = await db.prepare(`
-        SELECT kick_username, expires_at_ms, source
-        FROM subscriptions
-        WHERE broadcaster_id = ?
-          AND ((? IS NOT NULL AND kick_user_id = ?) OR (? IS NOT NULL AND kick_username = ? COLLATE NOCASE))
-        ORDER BY CASE WHEN ? IS NOT NULL AND kick_user_id = ? THEN 0 ELSE 1 END,
-                 expires_at_ms DESC
-        LIMIT 1
-      `).bind(kanal, kickId, kickId, nick, nick, kickId, kickId).first();
+      // ID Kick jest identyfikatorem nadrzędnym. Nie wolno przechodzić na nick,
+      // jeśli ID podano, ale nie znaleziono po nim rekordu.
+      const zapytanie = kickId
+        ? db.prepare(`
+            SELECT kick_username, expires_at_ms, source
+            FROM subscriptions
+            WHERE broadcaster_id = ? AND kick_user_id = ?
+            ORDER BY expires_at_ms DESC
+            LIMIT 1
+          `).bind(kanal, kickId)
+        : db.prepare(`
+            SELECT kick_username, expires_at_ms, source
+            FROM subscriptions
+            WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
+            ORDER BY expires_at_ms DESC
+            LIMIT 1
+          `).bind(kanal, nick);
+      const rekord = await zapytanie.first();
       if (!rekord || !Number.isSafeInteger(Number(rekord.expires_at_ms))) {
         return { status: 'unknown', subscribed: null, expires_at_ms: null };
       }
