@@ -328,7 +328,8 @@ async function handleApi(request, env) {
         kickUsername: username || null,
       });
       return json({
-        username: status.username || username || null, status: status.status, subscribed: status.subscribed,
+        username: status.username || username || null, known: status.status !== 'unknown',
+        status: status.status, subscribed: status.subscribed,
         expires_at: status.expires_at_ms ? new Date(status.expires_at_ms).toISOString() : null,
       });
     }
@@ -340,10 +341,10 @@ async function handleApi(request, env) {
     }
     const expiry = record ? Date.parse(record.expires_at) : NaN;
     if (!record || !Number.isFinite(expiry)) {
-      return json({ username: record?.username || username || null, status: 'unknown', subscribed: null, expires_at: record?.expires_at || null });
+      return json({ username: record?.username || username || null, known: false, status: 'unknown', subscribed: null, expires_at: record?.expires_at || null });
     }
     const subscribed = expiry > Date.now();
-    return json({ username: record.username || username || null, status: subscribed ? 'active' : 'inactive', subscribed, expires_at: record.expires_at });
+    return json({ username: record.username || username || null, known: true, status: subscribed ? 'active' : 'inactive', subscribed, expires_at: record.expires_at });
   }
   if (url.pathname === '/api/owner/start') {
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
