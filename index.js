@@ -68,8 +68,8 @@ async function verifyWebhookSignature(env, headers, rawBody) {
     return { valid: true, id };
   } catch (error) { console.error('Weryfikacja webhooka nie powiodła się:', error.message); return false; }
 }
-function repozytorium(env) {
-  return env.DB ? utworzRepozytoriumD1(env.DB) : null;
+function repozytorium(env, wymus = false) {
+  return env.DB && (wymus || env.D1_ENABLED === 'true') ? utworzRepozytoriumD1(env.DB) : null;
 }
 async function pobierzBroadcasterId(env) {
   const configured = String(env.KICK_BROADCASTER_ID || '').trim();
@@ -329,7 +329,7 @@ async function handleApi(request, env) {
   }
   if (url.pathname === '/api/admin/migrate-kv') {
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
-    const repo = repozytorium(env);
+    const repo = repozytorium(env, true);
     if (!repo) return json({ error: 'd1_not_configured' }, 503);
     const dryRun = url.searchParams.get('dry_run') !== 'false';
     const owner = await kickCurrentUser(await getBroadcasterAccessToken(env));
