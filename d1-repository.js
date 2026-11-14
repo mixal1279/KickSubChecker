@@ -220,7 +220,7 @@ export function utworzRepozytoriumD1(db) {
 
     async zakonczWebhook({ broadcasterId, eventId, subscriptions }) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
-      if (!Array.isArray(subscriptions) || subscriptions.length < 1 || subscriptions.length > 500) {
+      if (!Array.isArray(subscriptions) || subscriptions.length > 500) {
         throw new TypeError('Nieprawidłowa lista subskrypcji z webhooka.');
       }
       const teraz = Date.now();
