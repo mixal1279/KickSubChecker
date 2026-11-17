@@ -892,7 +892,7 @@ export default {
       if (url.pathname === '/callback') return handleCallback(request, env);
       if (url.pathname === '/webhook') return handleWebhook(request, env);
       if (url.pathname === '/register-events') return handleRegisterEvents(request, env);
-      if (url.pathname.startsWith('/api/')) return handleApi(request, env);
+      if (url.pathname.startsWith('/api/')) return await handleApi(request, env);
       if (url.pathname === '/') return text('Kick Sub Checker Worker działa.');
       return text('Not Found', 404);
     } catch (error) {
