@@ -246,6 +246,7 @@ test('dry-run paginuje KV bez przekraczania budżetu subrequests i bez zapisów'
     assert.equal(raportPierwszy.subscriptions_complete, false);
     assert.equal(raportPierwszy.has_more, true);
     assert.equal(raportPierwszy.duplicate_check_scope, 'current_page');
+    assert.equal(raportPierwszy.counts_scope, 'current_page');
     assert.equal(typeof raportPierwszy.links_cursor, 'string');
     assert.equal(typeof raportPierwszy.subscriptions_cursor, 'string');
 
