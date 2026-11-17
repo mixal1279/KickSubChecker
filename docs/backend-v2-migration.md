@@ -31,6 +31,10 @@ Odświeżanie OAuth zachowuje poprzedni refresh token, jeśli Kick nie zwróci n
 
 Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanych migracji — zmiany schematu wprowadzaj kolejnymi numerowanymi migracjami. Migracje należy wykonywać dokładnie raz i zapisywać ich zastosowanie w dokumentacji wdrożenia; repozytorium nie ma jeszcze automatycznego rejestru migracji.
 
+## Budżet zapytań D1 dla migratora
+
+Import przetwarza maksymalnie 20 rekordów KV na jedno żądanie. Każdy rekord wymaga obecnie jednego atomowego `D1 batch` oraz odczytu markera. Razem z przejęciem lease, odczytem stanu, checkpointem i finalizacją daje to maksymalnie około 46 wywołań D1 na końcowej stronie. Limit 20 utrzymuje migrator poniżej limitu 50 zapytań D1 na pojedyncze wywołanie Workera w planie Free. Dry-run może odczytywać KV stronami po 50, ponieważ nie wykonuje importu do D1.
+
 ## Testy integracyjne D1
 
 Test `test/d1-remote.integration.test.js` łączy się z Cloudflare D1 przez REST API i sprawdza rzeczywiste ograniczenia SQL, dozwolone źródła subskrypcji, unikalność powiązań, deduplikację webhooków, klucze obce oraz `ON DELETE CASCADE`.
