@@ -41,6 +41,8 @@ Dry-run jest również stronicowany: jedno żądanie sprawdza maksymalnie 12 rek
 
 ## Testy integracyjne D1
 
+`test/migration-worker-d1.integration.test.js` uruchamia rzeczywisty `worker.fetch()` z fixture KV oraz adapterem interfejsu D1, który wykonuje SQL przez Cloudflare D1 API na wskazanej testowej bazie. Test obejmuje dry-run, import obu faz, retry, markery, izolację broadcaster ID i sprzątanie CASCADE. To pełny test logiki handlera na rzeczywistej D1, ale nie uruchomienie kodu wewnątrz natywnego runtime Cloudflare Workers.
+
 Test `test/d1-remote.integration.test.js` łączy się z Cloudflare D1 przez REST API i sprawdza rzeczywiste ograniczenia SQL, dozwolone źródła subskrypcji, unikalność powiązań, deduplikację webhooków, klucze obce oraz `ON DELETE CASCADE`.
 
 Test celowo odmawia pracy na produkcyjnej bazie i dodatkowo sprawdza, czy wskazana baza ma dokładną nazwę `kick-sub-checker-test`. Bez kompletu zmiennych środowiskowych test jest pomijany.
