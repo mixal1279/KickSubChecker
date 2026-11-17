@@ -1,5 +1,6 @@
 /** Kick Sub Checker — Cloudflare Worker. */
 import { utworzRepozytoriumD1 } from './d1-repository.js';
+import { pobierzTokenMigracji } from './kv-migrator.js';
 import { walidujBroadcasteraWebhooka, walidujIdSubskrypcjiWebhooka, walidujTypIWersjeWebhooka, walidujWynikRejestracjiWebhookow } from './webhook-validation.js';
 export { OAuthTokenStore } from './oauth-token-store.js';
 
@@ -536,7 +537,12 @@ async function handleApi(request, env) {
     const repo = repozytorium(env, true);
     if (!repo) return json({ error: 'd1_not_configured' }, 503);
     const dryRun = url.searchParams.get('dry_run') !== 'false';
-    const owner = await kickCurrentUser(await getBroadcasterAccessToken(env));
+    const tokenDoMigracji = await pobierzTokenMigracji({
+      env,
+      dryRun,
+      odswiezToken: getBroadcasterAccessToken,
+    });
+    const owner = await kickCurrentUser(tokenDoMigracji);
     const configuredId = String(env.KICK_BROADCASTER_ID || '').trim();
     const storedId = await env.SUBS_KV.get('config:broadcaster_id');
     if (
