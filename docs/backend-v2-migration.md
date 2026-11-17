@@ -28,6 +28,8 @@ Odświeżanie OAuth zachowuje poprzedni refresh token, jeśli Kick nie zwróci n
 - `0001_backend_v2.sql` tworzy tabele kanałów, konfiguracji, powiązań, subskrypcji, webhooków i audytu.
 - `0002_legacy_subscription_sources.sql` rozszerza dozwolone źródła subskrypcji, zachowując rekordy już zapisane w D1. Wspiera stare wartości `gift`, `new`, `renewal` oraz nowe nazwy eventów Kick.
 - `0003_require_broadcaster_id.sql` dodaje triggery blokujące `NULL` w `channels.broadcaster_id` przy INSERT i UPDATE. Nie przebudowuje tabel ani nie modyfikuje istniejących rekordów.
+- `0004_kv_migration_runs.sql` tworzy trwały stan migracji per kanał: fazę, cursor, liczniki i lease, z CASCADE po usunięciu kanału.
+- `0005_kv_migration_items.sql` tworzy unikalne markery idempotencji dla źródłowych kluczy KV w fazach `links` i `subscriptions`, również z CASCADE.
 
 Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanych migracji — zmiany schematu wprowadzaj kolejnymi numerowanymi migracjami. Migracje należy wykonywać dokładnie raz i zapisywać ich zastosowanie w dokumentacji wdrożenia; repozytorium nie ma jeszcze automatycznego rejestru migracji.
 
@@ -50,7 +52,7 @@ Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa w
 
 ## Kolejność bezpiecznego przełączenia
 
-1. Zastosuj migracje D1 `0001`, `0002` i `0003` w środowisku docelowym.
+1. Zastosuj migracje D1 `0001` → `0002` → `0003` → `0004` → `0005` w środowisku docelowym.
 2. Ustaw `D1_ENABLED = "false"`. Nie wdrażaj przełączenia na produkcję na tym etapie.
 3. Uruchom `POST /api/admin/migrate-kv` (domyślnie dry-run).
 4. Sprawdź `links_skipped`, `subscriptions_seen`, `subscriptions_valid` i `errors`. Indeksy `sub:user_id:` są pomijane — importowane są tylko kanoniczne rekordy `sub:<username>`.
