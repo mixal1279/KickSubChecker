@@ -65,3 +65,39 @@ test('odrzuca nieprawidłowe dane wejściowe przed zapisem', async () => {
   await assert.rejects(magazyn.zapisz(token, 'nieznany', {}, Date.now() + 60_000), /typ tokena/);
   await assert.rejects(magazyn.zapisz(token, 'oauth-state', {}, Date.now() - 1), /wygaśnięcia/);
 });
+
+test('równoległe callbacki dostają tylko jedną aktywną rezerwację', async () => {
+  const magazyn = utworzMagazyn();
+  await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, Date.now() + 60_000);
+  const rezerwacje = await Promise.all([
+    magazyn.zarezerwuj(token, 'oauth-state'),
+    magazyn.zarezerwuj(token, 'oauth-state'),
+  ]);
+  assert.equal(rezerwacje.filter(Boolean).length, 1);
+  assert.equal(await magazyn.zarezerwuj(token, 'oauth-state'), null);
+});
+
+test('nieudana wymiana kodu zwalnia rezerwację do ponowienia', async () => {
+  const magazyn = utworzMagazyn();
+  await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, Date.now() + 60_000);
+  const pierwsza = await magazyn.zarezerwuj(token, 'oauth-state');
+  assert.ok(pierwsza);
+  assert.equal(await magazyn.zwolnij(token, 'oauth-state', pierwsza.id), true);
+  const druga = await magazyn.zarezerwuj(token, 'oauth-state');
+  assert.ok(druga);
+  assert.notEqual(druga.id, pierwsza.id);
+  assert.deepEqual(druga.dane, { verifier: 'pkce' });
+  assert.equal(await magazyn.zakoncz(token, 'oauth-state', druga.id), true);
+  assert.equal(await magazyn.zarezerwuj(token, 'oauth-state'), null);
+});
+
+test('wygasła rezerwacja może zostać przejęta po upływie lease', async () => {
+  const magazyn = utworzMagazyn();
+  await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, 100_000);
+  const pierwsza = await magazyn.zarezerwuj(token, 'oauth-state', 1_000, 5_000);
+  assert.ok(pierwsza);
+  const druga = await magazyn.zarezerwuj(token, 'oauth-state', 6_001, 5_000);
+  assert.ok(druga);
+  assert.notEqual(druga.id, pierwsza.id);
+  assert.equal(await magazyn.zakoncz(token, 'oauth-state', pierwsza.id), false);
+});
