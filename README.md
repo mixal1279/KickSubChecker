@@ -76,7 +76,7 @@ npx wrangler secret put ADMIN_API_SECRET
 Backend v2 może przejąć powiązania, subskrypcje i webhooki w D1, ale tokeny właściciela kanału nadal są przechowywane w KV pod istniejącym kluczem `ljay:tokens`. Worker potrafi odczytać tożsamość kanału z obecnego tokenu i odświeżyć go standardowym refresh tokenem. **Samo przełączenie bazy nie wymaga ponownej autoryzacji Kick.**
 
 Szczegółowa, bezpieczna procedura znajduje się w [docs/backend-v2-migration.md](docs/backend-v2-migration.md). Najważniejsze:
-- skonfiguruj binding D1 (`DB`) i zastosuj migracje `0001` oraz `0002`;
+- skonfiguruj binding D1 (`DB`) i zastosuj migracje `0001` → `0002` → `0003` → `0004` → `0005`;
 - instalacja obsługuje jeden kanał Kick i jeden serwer Discord;
 - pozostaw `D1_ENABLED = "false"`;
 - wykonaj dry-run endpointu `POST /api/admin/migrate-kv`;
