@@ -33,3 +33,14 @@ test('sekret administracyjny nie daje dostępu do zwykłego API bota', async () 
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: 'unauthorized' });
 });
+
+
+test('brak ADMIN_API_SECRET odmawia migracji przed dostępem do usług', async () => {
+  const response = await worker.fetch(new Request(workerUrl, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer admin-secret' },
+  }), { BOT_API_SECRET: 'admin-secret' });
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: 'unauthorized' });
+});
