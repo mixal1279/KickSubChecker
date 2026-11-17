@@ -293,6 +293,79 @@ export function utworzRepozytoriumD1(db) {
       sprawdzWynik(wynik, 'Oznaczenie błędnego webhooka');
     },
 
+
+    async przejmijMigracje({ broadcasterId, leaseToken, teraz = Date.now(), leaseMs = 60_000 }) {
+      const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
+      if (typeof leaseToken !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(leaseToken)) {
+        throw new TypeError('Nieprawidłowy token blokady migracji.');
+      }
+      if (!Number.isSafeInteger(teraz) || teraz <= 0 || !Number.isSafeInteger(leaseMs) || leaseMs < 10_000 || leaseMs > 300_000) {
+        throw new TypeError('Nieprawidłowy czas blokady migracji.');
+      }
+      const wynik = await db.prepare(`
+        INSERT INTO migration_runs
+          (broadcaster_id, status, phase, counts_json, lease_token, lease_expires_at_ms, started_at_ms, updated_at_ms)
+        VALUES (?, 'running', 'links', '{}', ?, ?, ?, ?)
+        ON CONFLICT(broadcaster_id) DO UPDATE SET
+          status = CASE WHEN migration_runs.status = 'completed' THEN 'completed' ELSE 'running' END,
+          lease_token = excluded.lease_token,
+          lease_expires_at_ms = excluded.lease_expires_at_ms,
+          updated_at_ms = excluded.updated_at_ms
+        WHERE migration_runs.status != 'completed'
+          AND (migration_runs.lease_expires_at_ms IS NULL
+            OR migration_runs.lease_expires_at_ms <= ?
+            OR migration_runs.lease_token = ?)
+      `).bind(kanal, leaseToken, teraz + leaseMs, teraz, teraz, teraz, leaseToken).run();
+      sprawdzWynik(wynik, 'Przejęcie blokady migracji');
+      return Number(wynik.meta?.changes || 0) === 1;
+    },
+
+    async pobierzStanMigracji({ broadcasterId }) {
+      return db.prepare(`
+        SELECT broadcaster_id, status, phase, cursor, counts_json,
+          lease_token, lease_expires_at_ms, started_at_ms, updated_at_ms, completed_at_ms
+        FROM migration_runs WHERE broadcaster_id = ?
+      `).bind(wymagajId(broadcasterId, 'ID kanału Kick')).first();
+    },
+
+    async zapiszPostepMigracji({ broadcasterId, leaseToken, phase, cursor = null, counts, teraz = Date.now(), leaseMs = 60_000 }) {
+      const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
+      if (typeof leaseToken !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(leaseToken)) throw new TypeError('Nieprawidłowy token blokady migracji.');
+      if (!['links', 'subscriptions', 'completed'].includes(phase)) throw new TypeError('Nieprawidłowy etap migracji.');
+      if (cursor !== null && (typeof cursor !== 'string' || cursor.length > 2048)) throw new TypeError('Nieprawidłowy kursor migracji.');
+      if (!counts || typeof counts !== 'object' || Array.isArray(counts)) throw new TypeError('Nieprawidłowe liczniki migracji.');
+      const wynik = await db.prepare(`
+        UPDATE migration_runs SET phase = ?, cursor = ?, counts_json = ?,
+          lease_expires_at_ms = ?, updated_at_ms = ?
+        WHERE broadcaster_id = ? AND status = 'running'
+          AND lease_token = ? AND lease_expires_at_ms > ?
+      `).bind(phase, cursor, JSON.stringify(counts), teraz + leaseMs, teraz, kanal, leaseToken, teraz).run();
+      sprawdzWynik(wynik, 'Zapis checkpointu migracji');
+      return Number(wynik.meta?.changes || 0) === 1;
+    },
+
+    async zakonczMigracje({ broadcasterId, leaseToken, teraz = Date.now() }) {
+      const wynik = await db.prepare(`
+        UPDATE migration_runs SET status = 'completed', phase = 'completed',
+          cursor = NULL, lease_token = NULL, lease_expires_at_ms = NULL,
+          completed_at_ms = ?, updated_at_ms = ?
+        WHERE broadcaster_id = ? AND status = 'running' AND lease_token = ?
+          AND lease_expires_at_ms > ?
+      `).bind(teraz, teraz, wymagajId(broadcasterId, 'ID kanału Kick'), leaseToken, teraz).run();
+      sprawdzWynik(wynik, 'Zakończenie migracji');
+      return Number(wynik.meta?.changes || 0) === 1;
+    },
+
+    async zwolnijMigracje({ broadcasterId, leaseToken, teraz = Date.now() }) {
+      const wynik = await db.prepare(`
+        UPDATE migration_runs SET lease_token = NULL, lease_expires_at_ms = NULL,
+          updated_at_ms = ?
+        WHERE broadcaster_id = ? AND status = 'running' AND lease_token = ?
+      `).bind(teraz, wymagajId(broadcasterId, 'ID kanału Kick'), leaseToken).run();
+      sprawdzWynik(wynik, 'Zwolnienie blokady migracji');
+      return Number(wynik.meta?.changes || 0) === 1;
+    },
+
     async oczyscWebhooki({ retentionBeforeMs }) {
       const granica = Number(retentionBeforeMs);
       if (!Number.isSafeInteger(granica) || granica <= 0) {
