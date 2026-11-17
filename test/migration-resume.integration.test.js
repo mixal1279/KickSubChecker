@@ -233,13 +233,13 @@ async function zFetchiemKick(fn) {
   try { return await fn(); } finally { globalThis.fetch = poprzedniFetch; }
 }
 
-test('handler wznawia import 50 linków po awarii checkpointu i paginuje po 20', async () => {
+test('handler wznawia import 50 linków po awarii checkpointu i paginuje po 16', async () => {
   const srodowisko = utworzSrodowisko({ bladCheckpoint: true });
   await zFetchiemKick(async () => {
     const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
     assert.equal(pierwsza.status, 500);
-    assert.equal(srodowisko.rekordy.size, 20);
-    assert.equal(srodowisko.markery.size, 20);
+    assert.equal(srodowisko.rekordy.size, 16);
+    assert.equal(srodowisko.markery.size, 16);
     assert.equal(srodowisko.stan().phase, 'links');
     assert.equal(srodowisko.stan().cursor, null);
     assert.equal(JSON.parse(srodowisko.stan().counts_json).links_seen ?? 0, 0);
@@ -247,23 +247,30 @@ test('handler wznawia import 50 linków po awarii checkpointu i paginuje po 20',
     const wznowiona = await worker.fetch(requestMigracji(), srodowisko.env);
     assert.equal(wznowiona.status, 200);
     const raport = await wznowiona.json();
-    assert.equal(raport.processed_this_request, 20);
-    assert.equal(raport.links_imported, 20);
+    assert.equal(raport.processed_this_request, 16);
+    assert.equal(raport.links_imported, 16);
     assert.equal(raport.has_more, true);
-    assert.equal(srodowisko.stan().cursor, '20');
+    assert.equal(srodowisko.stan().cursor, '16');
 
     const drugaStrona = await worker.fetch(requestMigracji(), srodowisko.env);
     assert.equal(drugaStrona.status, 200);
     const raportDrugi = await drugaStrona.json();
-    assert.equal(raportDrugi.processed_this_request, 20);
-    assert.equal(raportDrugi.links_imported, 40);
-    assert.equal(srodowisko.stan().cursor, '40');
+    assert.equal(raportDrugi.processed_this_request, 16);
+    assert.equal(raportDrugi.links_imported, 32);
+    assert.equal(srodowisko.stan().cursor, '32');
 
     const trzeciaStrona = await worker.fetch(requestMigracji(), srodowisko.env);
     assert.equal(trzeciaStrona.status, 200);
     const raportTrzeci = await trzeciaStrona.json();
-    assert.equal(raportTrzeci.processed_this_request, 10);
-    assert.equal(raportTrzeci.links_imported, 50);
+    assert.equal(raportTrzeci.processed_this_request, 16);
+    assert.equal(raportTrzeci.links_imported, 48);
+    assert.equal(srodowisko.stan().cursor, '48');
+
+    const czwartaStrona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(czwartaStrona.status, 200);
+    const raportCzwarty = await czwartaStrona.json();
+    assert.equal(raportCzwarty.processed_this_request, 2);
+    assert.equal(raportCzwarty.links_imported, 50);
     assert.equal(srodowisko.rekordy.size, 50);
     assert.equal(srodowisko.markery.size, 50);
     assert.equal(srodowisko.stan().phase, 'subscriptions');
