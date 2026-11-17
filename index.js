@@ -674,11 +674,12 @@ async function handleApi(request, env) {
         const prefix = phase === 'links' ? 'link:discord:' : 'sub:';
         // 20 rekordów × (D1 batch + odczyt markera) + operacje lease/checkpoint
         // utrzymują zapytania D1 poniżej limitu 50 na Worker invocation w planie Free.
+        const pageLimit = 20;
         const page = await env.SUBS_KV.list({
-          prefix, cursor: stan.cursor || undefined, limit: 20,
+          prefix, cursor: stan.cursor || undefined, limit: pageLimit,
         });
         if (
-          !page || !Array.isArray(page.keys) || page.keys.length > 50
+          !page || !Array.isArray(page.keys) || page.keys.length > pageLimit
           || typeof page.list_complete !== 'boolean'
           || (!page.list_complete && (
             typeof page.cursor !== 'string' || !page.cursor || page.cursor.length > 2048
