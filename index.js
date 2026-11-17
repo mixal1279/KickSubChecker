@@ -881,9 +881,9 @@ async function handleApi(request, env) {
         const kickId = String(record?.kick_user_id || '');
         const username = record?.username;
         if (
-          !/^\\d{17,20}$/.test(discordIdZKlucza)
+          !/^\d{17,20}$/.test(discordIdZKlucza)
           || discordId !== discordIdZKlucza
-          || !/^\\d{17,20}$/.test(discordId)
+          || !/^\d{17,20}$/.test(discordId)
           || !/^[0-9]{1,32}$/.test(kickId)
           || typeof username !== 'string' || !USERNAME_RE.test(username)
         ) {
