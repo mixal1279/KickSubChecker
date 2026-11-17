@@ -7,9 +7,11 @@ const kanal = '123456789';
 const token = 'test-access-token';
 const teraz = Date.now();
 
-function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false } = {}) {
+function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0 } = {}) {
   const rekordy = new Map();
+  const subskrypcjeD1 = new Map();
   const markery = new Set();
+  if (fazaPoczatkowa === 'subscriptions') markery.add('links|link:discord:10000000000000000');
   let stan = null;
   let bladCheckpointRaz = bladCheckpoint;
   let zwolnijOdczyt;
@@ -32,7 +34,7 @@ function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false
               if (sql.includes('INSERT INTO migration_runs')) {
                 const [broadcasterId, leaseToken, expiry, started, updated, current, tokenPowtorzony] = args;
                 if (!stan) {
-                  stan = { broadcaster_id: broadcasterId, status: 'running', phase: 'links', cursor: null, counts_json: '{}', lease_token: leaseToken, lease_expires_at_ms: expiry, started_at_ms: started, updated_at_ms: updated };
+                  stan = { broadcaster_id: broadcasterId, status: 'running', phase: fazaPoczatkowa, cursor: null, counts_json: fazaPoczatkowa === 'subscriptions' ? JSON.stringify({ links_seen: 1, links_valid: 1, links_imported: 1, links_skipped: 0, links_conflicts: 0 }) : '{}', lease_token: leaseToken, lease_expires_at_ms: expiry, started_at_ms: started, updated_at_ms: updated };
                   return { success: true, meta: { changes: 1 } };
                 }
                 if (stan.status !== 'completed' && (
@@ -91,15 +93,34 @@ function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false
     },
     async batch(polecenia) {
       wywolania.push({ typ: 'batch', liczba: polecenia.length });
+      if (polecenia.length === 2 && polecenia[0].sql.includes('INSERT INTO channels') && polecenia[1].sql.includes('INSERT INTO migration_runs')) {
+        const [kanalId, nick, created, updated, sprawdzKanal, current, tokenNowy] = polecenia[0].args;
+        const aktywny = stan && stan.status === 'running' && stan.lease_expires_at_ms > current && stan.lease_token !== tokenNowy;
+        if (!aktywny) wywolania.push({ typ: 'channel_upsert', kanalId, nick });
+        const [broadcasterId, leaseToken, expiry, started, changed, now, tokenAgain] = polecenia[1].args;
+        let zmiany = 0;
+        if (!aktywny && (!stan || stan.status !== 'completed') && (!stan || stan.lease_expires_at_ms == null || stan.lease_expires_at_ms <= now || stan.lease_token === tokenAgain)) {
+          if (!stan) stan = { broadcaster_id: broadcasterId, status: 'running', phase: fazaPoczatkowa, cursor: null, counts_json: fazaPoczatkowa === 'subscriptions' ? JSON.stringify({ links_seen: 1, links_valid: 1, links_imported: 1, links_skipped: 0, links_conflicts: 0 }) : '{}', lease_token: leaseToken, lease_expires_at_ms: expiry, started_at_ms: started, updated_at_ms: changed };
+          else Object.assign(stan, { lease_token: leaseToken, lease_expires_at_ms: expiry, updated_at_ms: changed });
+          zmiany = 1;
+        }
+        return [{ success: true, meta: { changes: aktywny ? 0 : 1 } }, { success: true, meta: { changes: zmiany } }];
+      }
       for (const polecenie of polecenia) {
         if (polecenie.sql.includes('INSERT INTO account_links')) {
           const [broadcasterId, discordId, kickId, username, linkedAt, updatedAt] = polecenie.args;
           const key = broadcasterId + '|' + discordId;
           if (!rekordy.has(key)) rekordy.set(key, { kickId, username, linkedAt, updatedAt });
-        } else if (polecenie.sql.includes('INSERT OR IGNORE INTO migration_items')) {
+        } else if (polecenie.sql.includes('INSERT OR IGNORE INTO migration_items') && polecenie.sql.includes("phase = 'links'")) {
           const [broadcasterId, sourceKey, importedAt, checkBroadcaster, discordId, kickId] = polecenie.args;
           const link = rekordy.get(checkBroadcaster + '|' + discordId);
           if (link?.kickId === kickId) markery.add('links|' + sourceKey);
+        } else if (polecenie.sql.includes('INSERT OR IGNORE INTO migration_items') && polecenie.sql.includes("'subscriptions'")) {
+          const [broadcasterId, sourceKey] = polecenie.args;
+          markery.add('subscriptions|' + sourceKey);
+        } else if (polecenie.sql.includes('INSERT INTO subscriptions')) {
+          const [broadcasterId, subscriberKey, kickId, username, expiry, source] = polecenie.args;
+          subskrypcjeD1.set(broadcasterId + '|' + subscriberKey, { kickId, username, expiry, source });
         } else {
           throw new Error('Nieobsługiwane SQL batch: ' + polecenie.sql);
         }
@@ -109,7 +130,11 @@ function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false
   };
 
   const wpisy = new Map();
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < subskrypcje; i++) {
+    const username = 'Sub' + i;
+    wpisy.set('sub:' + username.toLowerCase(), { username, user_id: String(300000000 + i), expires_at: new Date(Date.now() + 86400000).toISOString(), source: 'admin' });
+  }
+  for (let i = 0; i < (fazaPoczatkowa === 'subscriptions' ? 0 : 50); i++) {
     const discordId = String(10000000000000000n + BigInt(i));
     const kickId = String(200000000 + i);
     const key = 'link:discord:' + discordId;
@@ -146,7 +171,7 @@ function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false
   };
 
   return {
-    env, stan: () => stan, rekordy, markery, wywolania,
+    env, stan: () => stan, rekordy, subskrypcjeD1, markery, wywolania,
     odczytRozpoczety, odblokujOdczyt: zwolnijOdczyt,
   };
 }
@@ -202,5 +227,40 @@ test('drugi request handlera dostaje 409, gdy pierwszy utrzymuje lease', async (
     const pierwszy = await pierwszyPromise;
     assert.equal(pierwszy.status, 200);
     assert.equal(srodowisko.rekordy.size, 50);
+  });
+});
+
+
+test('handler wznowi import subskrypcji po awarii checkpointu bez duplikatów', async () => {
+  const srodowisko = utworzSrodowisko({ bladCheckpoint: true, fazaPoczatkowa: 'subscriptions', subskrypcje: 3 });
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal([...srodowisko.markery].filter((x) => x.startsWith('subscriptions|')).length, 3);
+    assert.equal(srodowisko.stan().phase, 'subscriptions');
+    assert.equal(srodowisko.stan().cursor, null);
+
+    const wznowiona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(wznowiona.status, 200);
+    const raport = await wznowiona.json();
+    assert.equal(raport.complete, true);
+    assert.equal(raport.subscriptions_imported, 3);
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal([...srodowisko.markery].filter((x) => x.startsWith('subscriptions|')).length, 3);
+  });
+});
+
+test('zablokowane żądanie nie wykonuje upsertu kanału', async () => {
+  const srodowisko = utworzSrodowisko({ blokujPierwszyOdczyt: true });
+  await zFetchiemKick(async () => {
+    const pierwszyPromise = worker.fetch(requestMigracji(), srodowisko.env);
+    await srodowisko.odczytRozpoczety;
+    const liczbaUpsertowPrzed = srodowisko.wywolania.filter((x) => x.typ === 'channel_upsert').length;
+    const drugi = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(drugi.status, 409);
+    assert.equal(srodowisko.wywolania.filter((x) => x.typ === 'channel_upsert').length, liczbaUpsertowPrzed);
+    srodowisko.odblokujOdczyt();
+    await pierwszyPromise;
   });
 });
