@@ -145,10 +145,11 @@ test('nieudana wymiana kodu zwalnia rezerwację do ponowienia', async () => {
 
 test('wygasła rezerwacja może zostać przejęta po upływie lease', async () => {
   const { magazyn } = utworzMagazyn();
-  await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, 100_000);
-  const pierwsza = await magazyn.zarezerwuj(token, 'oauth-state', 1_000, 5_000);
+  const teraz = Date.now();
+  await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, teraz + 100_000);
+  const pierwsza = await magazyn.zarezerwuj(token, 'oauth-state', teraz + 1_000, 5_000);
   assert.ok(pierwsza);
-  const druga = await magazyn.zarezerwuj(token, 'oauth-state', 6_001, 5_000);
+  const druga = await magazyn.zarezerwuj(token, 'oauth-state', teraz + 6_001, 5_000);
   assert.ok(druga);
   assert.notEqual(druga.id, pierwsza.id);
   assert.equal(await magazyn.zakoncz(token, 'oauth-state', pierwsza.id), false);
