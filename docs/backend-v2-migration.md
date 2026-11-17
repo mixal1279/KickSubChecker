@@ -56,6 +56,23 @@ Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa w
 
 Endpoint migracyjny wymaga Bearer secret bota. Nie umieszczaj sekretu w repozytorium ani w logach. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje OAuth i stan pomocniczy.
 
+
+## Dodatkowe zabezpieczenia webhooków
+
+Worker przed zapisem zdarzenia sprawdza:
+- `Kick-Event-Version: 1` oraz jeden z trzech obsługiwanych typów subskrypcji;
+- `payload.broadcaster.user_id` zgodny z kanałem skonfigurowanym w KV;
+- poprawność identyfikatorów użytkowników w payloadzie;
+- limit rozmiaru payloadu liczony w bajtach.
+
+Rejestracja eventów przekazuje `broadcaster_user_id` do Kick i zwraca błąd, jeśli API odrzuci żądanie lub część eventów. Nie traktuj samego HTTP 200 jako dowodu, że wszystkie subskrypcje zostały utworzone — sprawdź odpowiedź Kick.
+
+Repozytorium D1 aktualizuje nick, ID, źródło i znacznik czasu subskrypcji tylko wtedy, gdy przychodzący event nie jest starszy od zapisanego rekordu. Starszy event nie może cofnąć metadanych nowszej subskrypcji.
+
+## Ograniczenie jednorazowości OAuth
+
+Jednorazowe tokeny startowe i `state` OAuth są obecnie przechowywane w KV. KV nie udostępnia atomowego compare-and-delete, więc dwa równoległe żądania mogą odczytać ten sam token przed jego usunięciem. Samo przeniesienie usuwania tokena nie daje gwarancji atomowości. Ścisłe zabezpieczenie wymaga koordynatora z atomową sekcją krytyczną, np. Cloudflare Durable Object, albo zmiany modelu przechowywania i konsumpcji tokenów. Do czasu wdrożenia takiego mechanizmu nie deklarujemy pełnej odporności na równoległe użycie tokenu.
+
 ## Testy wymagane przed cutoverem
 
 - testy adaptera D1 i walidacji danych;
