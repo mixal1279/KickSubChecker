@@ -12,7 +12,7 @@ const idKanalu = '123456789';
 const pelneWyniki = () => OBSLUGIWANE_EVENTY_KICK.map((name, index) => ({
   name,
   version: 1,
-  subscription_id: `01JABCDEF0123456789ABCDE${index}`,
+  subscription_id: `01JABCDEF0123456789ABCDE0${index}`,
 }));
 
 test('akceptuje tylko trzy obsługiwane eventy i wersję nagłówka 1', () => {
@@ -78,7 +78,7 @@ test('odrzuca pusty, nadmiernie długi i nieprawidłowy identyfikator subskrypcj
 
 test('wiąże event z ID subskrypcji zarejestrowanym dla tego typu', () => {
   const identyfikatory = Object.fromEntries(
-    OBSLUGIWANE_EVENTY_KICK.map((typ, index) => [typ, `01JABCDEF0123456789ABCDE${index}`]),
+    OBSLUGIWANE_EVENTY_KICK.map((typ, index) => [typ, `01JABCDEF0123456789ABCDE0${index}`]),
   );
   for (const typ of OBSLUGIWANE_EVENTY_KICK) {
     assert.equal(walidujIdSubskrypcjiWebhooka(identyfikatory[typ], typ, identyfikatory), true);
