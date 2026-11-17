@@ -197,3 +197,20 @@ test('odrzuca zapytanie o subskrypcję bez nicku i ID', async () => {
   );
   assert.equal(db.wywolania.length, 0);
 });
+
+
+test('starszy event nie nadpisuje metadanych nowszej subskrypcji', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await repo.zapiszSubskrypcje({
+    broadcasterId: '12345',
+    kickUserId: '34567',
+    kickUsername: 'Nick',
+    expiresAtMs: Date.now() + 60_000,
+    source: 'channel.subscription.renewal',
+  });
+  const sql = db.wywolania[0].sql;
+  assert.match(sql, /WHEN excluded\.expires_at_ms >= subscriptions\.expires_at_ms/);
+  assert.match(sql, /ELSE subscriptions\.source/);
+  assert.match(sql, /ELSE subscriptions\.kick_username/);
+});
