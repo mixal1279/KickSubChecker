@@ -32,8 +32,7 @@ export function walidujWynikRejestracjiWebhookow(data) {
       || wersja !== 1
       || typeof wynik.error === 'string' && wynik.error.length > 0
       || typeof wynik.subscription_id !== 'string'
-      || wynik.subscription_id.length < 10
-      || wynik.subscription_id.length > 128
+      || !/^[0-7][0-9A-HJKMNP-TV-Z]{25}$/.test(wynik.subscription_id)
       || zaakceptowane.has(nazwa)
     ) {
       niepoprawne.push({
