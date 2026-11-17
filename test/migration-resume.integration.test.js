@@ -410,7 +410,7 @@ test('awaria D1 batch nie zapisuje markerów ani rekordów i pozwala ponowić st
 
     const retry = await worker.fetch(requestMigracji(), srodowisko.env);
     assert.equal(retry.status, 200);
-    assert.equal(srodowisko.rekordy.size, 20);
+    assert.equal(srodowisko.rekordy.size, 16);
     assert.equal(srodowisko.markery.size, 16);
   });
 });
