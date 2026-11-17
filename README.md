@@ -15,12 +15,13 @@ Projekt ma dwie osobne części: `KickSubChecker.js` to bot Discord (Node.js), a
 3. Wklej otrzymane ID do `wrangler.toml` zamiast `REPLACE_WITH_REAL_KV_NAMESPACE_ID`.
 4. Utwórz aplikację na https://dev.kick.com. W jej ustawieniach ustaw Redirect URI dokładnie na `https://TWOJ-WORKER.workers.dev/callback`.
 5. Ustaw `REDIRECT_URI` w `wrangler.toml` na ten sam adres i zastąp nazwę Workera/host w konfiguracji.
-6. Ustaw sekrety. `BOT_API_SECRET` musi być długim losowym sekretem, identycznym w Workerze i w `.env` bota:
+6. Ustaw sekrety. `BOT_API_SECRET` musi być długim losowym sekretem, identycznym w Workerze i w `.env` bota. `ADMIN_API_SECRET` musi być innym, niezależnym sekretem i nie może trafić do konfiguracji bota:
 
    ```bash
    npx wrangler secret put KICK_CLIENT_ID
    npx wrangler secret put KICK_CLIENT_SECRET
    npx wrangler secret put BOT_API_SECRET
+npx wrangler secret put ADMIN_API_SECRET
    ```
 
 7. Przed wdrożeniem sprawdź, czy `wrangler.toml` zawiera prawdziwe ID KV oraz właściwy `REDIRECT_URI`; wartości `REPLACE_WITH_...` są tylko placeholderami.
@@ -59,6 +60,7 @@ Projekt ma dwie osobne części: `KickSubChecker.js` to bot Discord (Node.js), a
 - `POST /register-events` — chroniona rejestracja eventów.
 - `GET /api/check?username=nick` — status suba (`active`, `inactive` lub `unknown`), wymaga Bearer secret. Brak rekordu albo niepoprawna data wygaśnięcia zwraca `unknown`, a nie `inactive`.
 - `POST /api/link/start` — tworzy jednorazowy link OAuth dla ID Discorda, wymaga Bearer secret.
+- `POST /api/admin/migrate-kv` — migracja KV → D1; wymaga osobnego `ADMIN_API_SECRET` (nie `BOT_API_SECRET`), domyślnie wykonuje wyłącznie dry-run. Import uruchamia `?dry_run=false`.
 - `GET /api/link?discord_id=ID` i `GET /api/links` — zweryfikowane powiązania, wymagają Bearer secret.
 
 ## Ważne ograniczenia
@@ -81,4 +83,4 @@ Szczegółowa, bezpieczna procedura znajduje się w [docs/backend-v2-migration.m
 - sprawdź raport, w tym stare źródła `gift`, `new`, `renewal`, a następnie wykonaj import z `?dry_run=false`;
 - dopiero po porównaniu danych ustaw `D1_ENABLED = "true"`.
 
-Nie usuwaj KV po przełączeniu — nadal przechowuje tokeny OAuth, stan PKCE, jednorazowe linki i cache klucza publicznego. Endpoint migracyjny wymaga tego samego Bearer secret co API bota.
+Nie usuwaj KV po przełączeniu — nadal przechowuje tokeny OAuth, stan PKCE, jednorazowe linki i cache klucza publicznego. Endpoint migracyjny wymaga osobnego `ADMIN_API_SECRET`. Nie udostępniaj go botowi Discord ani nie używaj ponownie `BOT_API_SECRET`.
