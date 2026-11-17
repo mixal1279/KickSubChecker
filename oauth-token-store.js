@@ -22,7 +22,25 @@ export class OAuthTokenStore {
       if (istniejacy) throw new Error('Token jednorazowy już istnieje.');
       await tx.put(klucz, { typ, dane, wygasa_at: wygasaAt });
     });
+    // Alarm shardu usuwa niezużyte wpisy; czas ważności i tak jest sprawdzany przy odczycie.
+    await this.ctx.storage.setAlarm(Date.now() + 60_000);
     return true;
+  }
+
+  async alarm() {
+    const teraz = Date.now();
+    const wpisy = await this.ctx.storage.list({ prefix: 'jednorazowy:' });
+    let najblizszeWygasniecie = null;
+    for (const [klucz, wpis] of wpisy) {
+      if (!Number.isSafeInteger(wpis?.wygasa_at) || wpis.wygasa_at <= teraz) {
+        await this.ctx.storage.delete(klucz);
+      } else if (najblizszeWygasniecie === null || wpis.wygasa_at < najblizszeWygasniecie) {
+        najblizszeWygasniecie = wpis.wygasa_at;
+      }
+    }
+    if (najblizszeWygasniecie !== null) {
+      await this.ctx.storage.setAlarm(najblizszeWygasniecie);
+    }
   }
 
   async zuzyj(token, typ, teraz = Date.now()) {
