@@ -314,3 +314,38 @@ test('import wygasłego OAuth odświeża token z timeoutem i nie przechodzi dale
     globalThis.fetch = poprzedniFetch;
   }
 });
+
+
+test('błąd OAuth nie ujawnia treści odpowiedzi ani tokenów w logach', async () => {
+  const { env, zapisyKv, wywolaniaD1 } = utworzEnv({ tokenWazny: false });
+  const poprzedniFetch = globalThis.fetch;
+  const poprzedniConsoleError = console.error;
+  let logi = '';
+  globalThis.fetch = async (_url, options = {}) => {
+    assert.ok(options.signal instanceof AbortSignal);
+    return new Response(JSON.stringify({
+      error: 'invalid_grant',
+      access_token: 'SENSITIVE_ACCESS_TOKEN_TEST',
+      refresh_token: 'SENSITIVE_REFRESH_TOKEN_TEST',
+    }), { status: 401 });
+  };
+  console.error = (...args) => { logi += args.join(' '); };
+
+  try {
+    const response = await worker.fetch(new Request(
+      'https://worker.test/api/admin/migrate-kv?dry_run=false',
+      { method: 'POST', headers: { Authorization: `Bearer ${sekret}` } },
+    ), env);
+    assert.equal(response.status, 500);
+    const body = await response.text();
+    assert.equal(body.includes('SENSITIVE_ACCESS_TOKEN_TEST'), false);
+    assert.equal(body.includes('SENSITIVE_REFRESH_TOKEN_TEST'), false);
+    assert.equal(logi.includes('SENSITIVE_ACCESS_TOKEN_TEST'), false);
+    assert.equal(logi.includes('SENSITIVE_REFRESH_TOKEN_TEST'), false);
+    assert.deepEqual(zapisyKv, []);
+    assert.deepEqual(wywolaniaD1, []);
+  } finally {
+    globalThis.fetch = poprzedniFetch;
+    console.error = poprzedniConsoleError;
+  }
+});
