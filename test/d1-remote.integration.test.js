@@ -93,14 +93,12 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
   const discordId = noweId();
   const kickId = noweId();
   const teraz = Date.now();
-  let kanalUtworzony = false;
 
   try {
     await zapytaj(
       'INSERT INTO channels (broadcaster_id, broadcaster_username, created_at_ms, updated_at_ms) VALUES (?, ?, ?, ?)',
       [broadcasterId, 'd1-integration-test', teraz, teraz],
     );
-    kanalUtworzony = true;
 
     await assert.rejects(
       zapytaj(
@@ -233,10 +231,8 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
     assert.deepEqual(fk.results, [], 'Baza nie może zawierać naruszeń kluczy obcych.');
 
   } finally {
-    if (kanalUtworzony) {
-      await zapytaj('DELETE FROM channels WHERE broadcaster_id = ?', [broadcasterId]);
-      kanalUtworzony = false;
-    }
+    // Zawsze wykonujemy DELETE: timeout odpowiedzi INSERT nie dowodzi, że zapis nie doszedł do D1.
+    await zapytaj('DELETE FROM channels WHERE broadcaster_id = ?', [broadcasterId]);
 
     // Weryfikacja CASCADE jest wykonywana również po nieudanym asercie testu.
     for (const tabela of [
