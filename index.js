@@ -675,6 +675,17 @@ async function handleApi(request, env) {
           nextCursor = null;
         }
         const zakonczone = phase === 'subscriptions' && page.list_complete;
+        if (zakonczone) {
+          const trwaleZaimportowane = await repo.policzElementyMigracji({ broadcasterId: owner.user_id });
+          if (
+            trwaleZaimportowane.links > raport.links_valid
+            || trwaleZaimportowane.subscriptions > raport.subscriptions_valid
+          ) {
+            throw new Error('Niespójne liczniki elementów migracji względem przetworzonych rekordów KV.');
+          }
+          raport.links_imported = trwaleZaimportowane.links;
+          raport.subscriptions_imported = trwaleZaimportowane.subscriptions;
+        }
         const zapisano = await repo.zapiszPostepMigracji({
           broadcasterId: owner.user_id, leaseToken,
           phase: zakonczone ? 'completed' : nextPhase,
