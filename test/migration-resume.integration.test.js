@@ -7,7 +7,7 @@ const kanal = '123456789';
 const token = 'test-access-token';
 const teraz = Date.now();
 
-function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0, countsJson = null, cursorPoczatkowy = null } = {}) {
+function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bladImportBatch = false, bladListy = false, niekompletnaStrona = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0, countsJson = null, cursorPoczatkowy = null } = {}) {
   const rekordy = new Map();
   const subskrypcjeD1 = new Map();
   const markery = new Set();
@@ -15,6 +15,9 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, blo
   let stan = null;
   let bladCheckpointRaz = bladCheckpoint;
   let bladFinalizacjiRaz = bladFinalizacji;
+  let bladImportBatchRaz = bladImportBatch;
+  let bladListyRaz = bladListy;
+  let niekompletnaStronaRaz = niekompletnaStrona;
   let zwolnijOdczyt;
   let sygnalOdczytu;
   const odczytRozpoczety = new Promise((resolve) => { sygnalOdczytu = resolve; });
@@ -100,6 +103,10 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, blo
     },
     async batch(polecenia) {
       wywolania.push({ typ: 'batch', liczba: polecenia.length });
+      if (bladImportBatchRaz && polecenia.length === 2 && polecenia[0].sql.includes('INSERT INTO account_links')) {
+        bladImportBatchRaz = false;
+        throw new Error('symulowana awaria D1 batch');
+      }
       if (polecenia.length === 2 && polecenia[0].sql.includes('INSERT INTO channels') && polecenia[1].sql.includes('INSERT INTO migration_runs')) {
         const [kanalId, nick, created, updated, sprawdzKanal, current, tokenNowy] = polecenia[0].args;
         const aktywny = stan && stan.status === 'running' && stan.lease_expires_at_ms > current && stan.lease_token !== tokenNowy;
@@ -173,6 +180,14 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, blo
         return null;
       },
       async list({ prefix, cursor, limit = 1000 }) {
+        if (bladListyRaz) {
+          bladListyRaz = false;
+          throw new Error('symulowana awaria KV list');
+        }
+        if (niekompletnaStronaRaz) {
+          niekompletnaStronaRaz = false;
+          return { keys: [], list_complete: false };
+        }
         const keys = [...wpisy.keys()].filter(key => key.startsWith(prefix)).sort();
         const offset = cursor == null ? 0 : Number(cursor);
         if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1) {
@@ -354,5 +369,48 @@ test('odrzuca niekompletny cursor przed odczytem strony KV', async () => {
     assert.equal(response.status, 500);
     assert.equal(listy, 0);
     assert.equal(srodowisko.stan().lease_token, null);
+  });
+});
+
+
+test('awaria KV list zwalnia lease i pozwala bezpiecznie ponowić stronę', async () => {
+  const srodowisko = utworzSrodowisko({ bladListy: true });
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.stan().lease_token, null);
+    assert.equal(srodowisko.rekordy.size, 0);
+
+    const retry = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(retry.status, 200);
+    assert.equal(srodowisko.rekordy.size, 20);
+    assert.equal(srodowisko.stan().cursor, '20');
+  });
+});
+
+test('awaria D1 batch nie zapisuje markerów ani rekordów i pozwala ponowić stronę', async () => {
+  const srodowisko = utworzSrodowisko({ bladImportBatch: true });
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.stan().lease_token, null);
+    assert.equal(srodowisko.rekordy.size, 0);
+    assert.equal(srodowisko.markery.size, 0);
+
+    const retry = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(retry.status, 200);
+    assert.equal(srodowisko.rekordy.size, 20);
+    assert.equal(srodowisko.markery.size, 20);
+  });
+});
+
+test('odrzuca stronę KV bez kursora przy list_complete=false', async () => {
+  const srodowisko = utworzSrodowisko({ niekompletnaStrona: true });
+  await zFetchiemKick(async () => {
+    const response = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(response.status, 500);
+    assert.equal(srodowisko.stan().lease_token, null);
+    assert.equal(srodowisko.rekordy.size, 0);
+    assert.equal(srodowisko.markery.size, 0);
   });
 });
