@@ -111,7 +111,7 @@ function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false
           const [broadcasterId, discordId, kickId, username, linkedAt, updatedAt] = polecenie.args;
           const key = broadcasterId + '|' + discordId;
           if (!rekordy.has(key)) rekordy.set(key, { kickId, username, linkedAt, updatedAt });
-        } else if (polecenie.sql.includes('INSERT OR IGNORE INTO migration_items') && polecenie.sql.includes("phase = 'links'")) {
+        } else if (polecenie.sql.includes('INSERT OR IGNORE INTO migration_items') && polecenie.sql.includes("'links'")) {
           const [broadcasterId, sourceKey, importedAt, checkBroadcaster, discordId, kickId] = polecenie.args;
           const link = rekordy.get(checkBroadcaster + '|' + discordId);
           if (link?.kickId === kickId) markery.add('links|' + sourceKey);
