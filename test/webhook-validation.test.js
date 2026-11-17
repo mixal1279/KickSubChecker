@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   OBSLUGIWANE_EVENTY_KICK,
   walidujBroadcasteraWebhooka,
+  walidujIdSubskrypcjiWebhooka,
   walidujTypIWersjeWebhooka,
   walidujWynikRejestracjiWebhookow,
 } from '../webhook-validation.js';
@@ -73,4 +74,19 @@ test('odrzuca pusty, nadmiernie długi i nieprawidłowy identyfikator subskrypcj
     wyniki[0] = { ...wyniki[0], subscription_id };
     assert.equal(walidujWynikRejestracjiWebhookow({ data: wyniki }).ok, false);
   }
+});
+
+test('wiąże event z ID subskrypcji zarejestrowanym dla tego typu', () => {
+  const identyfikatory = Object.fromEntries(
+    OBSLUGIWANE_EVENTY_KICK.map((typ, index) => [typ, `01JABCDEF0123456789ABCDE${index}`]),
+  );
+  for (const typ of OBSLUGIWANE_EVENTY_KICK) {
+    assert.equal(walidujIdSubskrypcjiWebhooka(identyfikatory[typ], typ, identyfikatory), true);
+    assert.equal(walidujIdSubskrypcjiWebhooka(identyfikatory[typ], 'channel.subscription.new', identyfikatory),
+      typ === 'channel.subscription.new');
+  }
+  assert.equal(walidujIdSubskrypcjiWebhooka('01JABCDEF0123456789ABCDE0', 'unknown', identyfikatory), false);
+  assert.equal(walidujIdSubskrypcjiWebhooka('', OBSLUGIWANE_EVENTY_KICK[0], identyfikatory), false);
+  assert.equal(walidujIdSubskrypcjiWebhooka('not-a-ulid', OBSLUGIWANE_EVENTY_KICK[0], identyfikatory), false);
+  assert.equal(walidujIdSubskrypcjiWebhooka('01JABCDEF0123456789ABCDE0', OBSLUGIWANE_EVENTY_KICK[0], null), false);
 });
