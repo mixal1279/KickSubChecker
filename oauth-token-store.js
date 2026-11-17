@@ -86,8 +86,8 @@ export class OAuthTokenStore {
     if (typeof id !== 'string' || id.length > 64) return false;
     return this.ctx.storage.transactionSync(() => {
       const usuniete = this.sql.exec(
-        'DELETE FROM oauth_tokens WHERE token = ? AND typ = ? AND rezerwacja_id = ? RETURNING token',
-        token, typ, id,
+        'DELETE FROM oauth_tokens WHERE token = ? AND typ = ? AND rezerwacja_id = ? AND rezerwacja_do > ? RETURNING token',
+        token, typ, id, Date.now(),
       ).toArray();
       return usuniete.length === 1;
     });
