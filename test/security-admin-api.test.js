@@ -79,3 +79,24 @@ test('migrator odrzuca powtórzony parametr dry_run', async () => {
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: 'invalid_dry_run' });
 });
+
+
+test('import odrzuca cursory przeznaczone wyłącznie dla dry-run', async () => {
+  const response = await worker.fetch(new Request(workerUrl + '?dry_run=false&links_cursor=abc', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer admin-secret' },
+  }), { ADMIN_API_SECRET: 'admin-secret' });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'pagination_only_available_for_dry_run' });
+});
+
+test('dry-run odrzuca cursor i flage ukończenia tego samego prefiksu jednocześnie', async () => {
+  const response = await worker.fetch(new Request(workerUrl + '?dry_run=true&links_done=true&links_cursor=abc', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer admin-secret' },
+  }), { ADMIN_API_SECRET: 'admin-secret' });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'conflicting_pagination_parameters' });
+});
