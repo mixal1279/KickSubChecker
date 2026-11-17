@@ -551,14 +551,11 @@ async function handleApi(request, env) {
     ) return json({ error: 'broadcaster_mismatch' }, 409);
 
     if (!dryRun) {
-      await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
-    }
-
-    if (!dryRun) {
       const leaseToken = randomString(32);
       const teraz = Date.now();
-      const przejeto = await repo.przejmijMigracje({
-        broadcasterId: owner.user_id, leaseToken, teraz, leaseMs: 240_000,
+      const przejeto = await repo.zapewnijKanalIPrzejmijMigracje({
+        broadcasterId: owner.user_id, username: owner.username,
+        leaseToken, teraz, leaseMs: 240_000,
       });
       if (!przejeto) {
         const stan = await repo.pobierzStanMigracji({ broadcasterId: owner.user_id });
