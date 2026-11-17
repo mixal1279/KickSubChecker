@@ -76,6 +76,11 @@ async function bearerAuthorized(request, env) {
 async function adminBearerAuthorized(request, env) {
   const sekret = env.ADMIN_API_SECRET;
   if (typeof sekret !== 'string' || !sekret) return false;
+  const sekretBota = env.BOT_API_SECRET;
+  if (
+    typeof sekretBota === 'string' && sekretBota
+    && await constantTimeEqual(sekret, sekretBota)
+  ) return false;
   const value = request.headers.get('Authorization') || '';
   return constantTimeEqual(value, `Bearer ${sekret}`);
 }
@@ -606,11 +611,11 @@ async function handleApi(request, env) {
       (url.searchParams.get('links_done') === 'true' && url.searchParams.has('links_cursor'))
       || (url.searchParams.get('subscriptions_done') === 'true' && url.searchParams.has('subscriptions_cursor'))
     ) return json({ error: 'conflicting_pagination_parameters' }, 400);
+    const repo = repozytorium(env, true);
+    if (!repo) return json({ error: 'd1_not_configured' }, 503);
     if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function' || typeof env.SUBS_KV.list !== 'function') {
       return json({ error: 'kv_not_configured' }, 503);
     }
-    const repo = repozytorium(env, true);
-    if (!repo) return json({ error: 'd1_not_configured' }, 503);
     const tokenDoMigracji = await pobierzTokenMigracji({
       env,
       dryRun,
