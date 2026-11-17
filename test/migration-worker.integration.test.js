@@ -5,17 +5,21 @@ import worker from '../index.js';
 const sekret = 'test-secret';
 const broadcasterId = '123456789';
 
-function utworzEnv({ tokenWazny = true } = {}) {
+function utworzEnv({
+  tokenWazny = true,
+  tokenObecny = true,
+  storedBroadcasterId = broadcasterId,
+  bladOdczytuKv = false,
+} = {}) {
   const zapisyKv = [];
   const wywolaniaD1 = [];
-  const dane = new Map([
-    ['ljay:tokens', {
-      access_token: 'test-access-token',
-      refresh_token: 'test-refresh-token',
-      expires_at: tokenWazny ? Date.now() + 300_000 : Date.now() - 1,
-    }],
-    ['config:broadcaster_id', broadcasterId],
-  ]);
+  const dane = new Map();
+  if (tokenObecny) dane.set('ljay:tokens', {
+    access_token: 'test-access-token',
+    refresh_token: 'test-refresh-token',
+    expires_at: tokenWazny ? Date.now() + 300_000 : Date.now() - 1,
+  });
+  if (storedBroadcasterId !== null) dane.set('config:broadcaster_id', storedBroadcasterId);
 
   const db = {
     prepare(sql) {
@@ -35,6 +39,7 @@ function utworzEnv({ tokenWazny = true } = {}) {
     D1_ENABLED: 'false',
     SUBS_KV: {
       async get(key, type) {
+        if (bladOdczytuKv) throw new Error('symulowana awaria KV get');
         const value = dane.get(key) ?? null;
         if (type === 'json' && value && typeof value === 'string') return JSON.parse(value);
         return value;
@@ -120,6 +125,77 @@ test('endpoint migracji wymaga poprawnego Bearer tokena przed dostępem do usłu
   ), env);
 
   assert.equal(response.status, 401);
+  assert.deepEqual(zapisyKv, []);
+  assert.deepEqual(wywolaniaD1, []);
+});
+
+
+test('endpoint dry-run odrzuca brak tokenu OAuth bez wywołania Kick', async () => {
+  const { env, zapisyKv, wywolaniaD1 } = utworzEnv({ tokenObecny: false });
+  const poprzedniFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('Nieoczekiwane wywołanie HTTP.'); };
+
+  try {
+    const response = await worker.fetch(utworzRequest(), env);
+    assert.equal(response.status, 500);
+    assert.deepEqual(zapisyKv, []);
+    assert.deepEqual(wywolaniaD1, []);
+  } finally {
+    globalThis.fetch = poprzedniFetch;
+  }
+});
+
+test('endpoint dry-run odrzuca niezgodny broadcaster ID przed migracją', async () => {
+  const { env, zapisyKv, wywolaniaD1 } = utworzEnv({ storedBroadcasterId: '987654321' });
+  const poprzedniFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    data: [{ user_id: broadcasterId, username: 'testchannel' }],
+  }), { status: 200 });
+
+  try {
+    const response = await worker.fetch(utworzRequest(), env);
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'broadcaster_mismatch' });
+    assert.deepEqual(zapisyKv, []);
+    assert.deepEqual(wywolaniaD1, []);
+  } finally {
+    globalThis.fetch = poprzedniFetch;
+  }
+});
+
+test('endpoint dry-run odrzuca niepoprawny broadcaster ID z odpowiedzi Kick', async () => {
+  const { env, zapisyKv, wywolaniaD1 } = utworzEnv();
+  const poprzedniFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    data: [{ user_id: 'not-a-kick-id', username: 'testchannel' }],
+  }), { status: 200 });
+
+  try {
+    const response = await worker.fetch(utworzRequest(), env);
+    assert.equal(response.status, 500);
+    assert.deepEqual(zapisyKv, []);
+    assert.deepEqual(wywolaniaD1, []);
+  } finally {
+    globalThis.fetch = poprzedniFetch;
+  }
+});
+
+test('endpoint migracji odmawia pracy bez bindingu D1', async () => {
+  const { env, zapisyKv, wywolaniaD1 } = utworzEnv();
+  env.DB = undefined;
+  const response = await worker.fetch(utworzRequest(), env);
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'd1_not_configured' });
+  assert.deepEqual(zapisyKv, []);
+  assert.deepEqual(wywolaniaD1, []);
+});
+
+test('endpoint migracji bezpiecznie kończy się przy awarii odczytu KV', async () => {
+  const { env, zapisyKv, wywolaniaD1 } = utworzEnv({ bladOdczytuKv: true });
+  const response = await worker.fetch(utworzRequest(), env);
+
+  assert.equal(response.status, 500);
   assert.deepEqual(zapisyKv, []);
   assert.deepEqual(wywolaniaD1, []);
 });
