@@ -35,6 +35,31 @@ async function zapytaj(sql, params = []) {
   return body.result?.[0] || { results: [], meta: {} };
 }
 
+async function batchuj(polecenia) {
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}/query`,
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        batch: polecenia.map(({ sql, params = [] }) => ({ sql, params: params.map(String) })),
+      }),
+      signal: AbortSignal.timeout(15_000),
+    },
+  );
+
+  const body = await response.json().catch(() => null);
+  if (!response.ok || body?.success !== true) {
+    const opis = body?.errors?.map((blad) => blad.message).join('; ')
+      || `HTTP ${response.status}`;
+    throw new Error(`Cloudflare D1 batch: ${opis}`);
+  }
+  return body.result || [];
+}
+
 async function sprawdzBazeTestowa() {
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${accountId}/d1/database/${databaseId}`,
@@ -143,6 +168,66 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
       'INSERT INTO audit_log (broadcaster_id, actor_type, actor_id, action, metadata_json, created_at_ms) VALUES (?, ?, ?, ?, ?, ?)',
       [broadcasterId, 'system', 'integration-test', 'integration.test', '{}', teraz],
     );
+
+    const linkSourceKey = `link:discord:${discordId}`;
+    const linkBatch = [
+      {
+        sql: 'INSERT INTO account_links (broadcaster_id, discord_user_id, kick_user_id, kick_username, linked_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+        params: [broadcasterId, discordId, kickId, 'integration-user', teraz, teraz],
+      },
+      {
+        sql: `INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms)
+          SELECT ?, 'links', ?, ? WHERE EXISTS (
+            SELECT 1 FROM account_links
+            WHERE broadcaster_id = ? AND discord_user_id = ? AND kick_user_id = ?
+          )`,
+        params: [broadcasterId, linkSourceKey, teraz, broadcasterId, discordId, kickId],
+      },
+      {
+        sql: "SELECT 1 AS imported FROM migration_items WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ? LIMIT 1",
+        params: [broadcasterId, linkSourceKey],
+      },
+    ];
+    const linkFirst = await batchuj(linkBatch);
+    const linkRetry = await batchuj(linkBatch);
+    assert.equal(linkFirst[2]?.results?.[0]?.imported, 1);
+    assert.equal(linkRetry[2]?.results?.[0]?.imported, 1);
+
+    const subSourceKey = 'sub:integration-user';
+    const subBatch = (expiry, username, source) => [
+      {
+        sql: "INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms) VALUES (?, 'subscriptions', ?, ?)",
+        params: [broadcasterId, subSourceKey, teraz],
+      },
+      {
+        sql: `INSERT INTO subscriptions (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
+          SELECT ?, ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?)
+          ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
+            kick_user_id = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN COALESCE(excluded.kick_user_id, subscriptions.kick_user_id) ELSE subscriptions.kick_user_id END,
+            kick_username = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.kick_username ELSE subscriptions.kick_username END,
+            expires_at_ms = MAX(subscriptions.expires_at_ms, excluded.expires_at_ms),
+            source = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.source ELSE subscriptions.source END,
+            updated_at_ms = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms END`,
+        params: [broadcasterId, `id:${kickId}`, kickId, username, expiry, source, teraz, broadcasterId, subSourceKey],
+      },
+      {
+        sql: "SELECT 1 AS imported FROM migration_items WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ? LIMIT 1",
+        params: [broadcasterId, subSourceKey],
+      },
+    ];
+    const expiryNowa = teraz + 120_000;
+    const subFirst = await batchuj(subBatch(expiryNowa, 'newer-user', 'renewal'));
+    const subRetry = await batchuj(subBatch(teraz + 1, 'older-user', 'new'));
+    assert.equal(subFirst[2]?.results?.[0]?.imported, 1);
+    assert.equal(subRetry[2]?.results?.[0]?.imported, 1);
+    const subState = await zapytaj(
+      'SELECT kick_username, expires_at_ms, source FROM subscriptions WHERE broadcaster_id = ? AND subscriber_key = ?',
+      [broadcasterId, `id:${kickId}`],
+    );
+    assert.equal(subState.results?.[0]?.kick_username, 'newer-user');
+    assert.equal(Number(subState.results?.[0]?.expires_at_ms), expiryNowa);
+    assert.equal(subState.results?.[0]?.source, 'renewal');
 
     const fk = await zapytaj('PRAGMA foreign_key_check');
     assert.deepEqual(fk.results, [], 'Baza nie może zawierać naruszeń kluczy obcych.');
