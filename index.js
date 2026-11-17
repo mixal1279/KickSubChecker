@@ -18,6 +18,15 @@ async function zapiszTokenJednorazowy(env, token, typ, dane) {
 async function zuzyjTokenJednorazowy(env, token, typ) {
   return magazynTokenow(env, token).zuzyj(token, typ, Date.now());
 }
+async function zarezerwujTokenOAuth(env, token) {
+  return magazynTokenow(env, token).zarezerwuj(token, 'oauth-state', Date.now(), 60_000);
+}
+async function zakonczTokenOAuth(env, token, rezerwacjaId) {
+  return magazynTokenow(env, token).zakoncz(token, 'oauth-state', rezerwacjaId);
+}
+async function zwolnijTokenOAuth(env, token, rezerwacjaId) {
+  return magazynTokenow(env, token).zwolnij(token, 'oauth-state', rezerwacjaId);
+}
 
 const KICK_AUTHORIZE_URL = 'https://id.kick.com/oauth/authorize';
 const KICK_TOKEN_URL = 'https://id.kick.com/oauth/token';
@@ -173,11 +182,33 @@ async function handleCallback(request, env) {
   const code = url.searchParams.get('code');
   const state = url.searchParams.get('state');
   if (!code || !state || state.length > 200) return text('Brak kodu OAuth lub nieprawidłowy parametr state.', 400);
-  const pending = await zuzyjTokenJednorazowy(env, state, 'oauth-state');
-  if (!pending || Date.now() - pending.created_at > TOKEN_TTL_MS) return text('Link wygasł lub jest nieprawidłowy. Uruchom łączenie kont ponownie.', 400);
-  const response = await fetch(KICK_TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', client_id: env.KICK_CLIENT_ID, client_secret: env.KICK_CLIENT_SECRET, redirect_uri: env.REDIRECT_URI, code, code_verifier: pending.verifier }) });
+  const rezerwacja = await zarezerwujTokenOAuth(env, state);
+  if (!rezerwacja || !rezerwacja.dane || Date.now() - rezerwacja.dane.created_at > TOKEN_TTL_MS) {
+    return text('Link wygasł, jest nieprawidłowy lub autoryzacja jest już przetwarzana. Spróbuj ponownie za chwilę.', 400);
+  }
+  const pending = rezerwacja.dane;
   let tokens;
-  try { tokens = await parseJsonResponse(response, 'Wymiana kodu OAuth'); } catch (error) { console.error(error.message); return text('Nie udało się zakończyć autoryzacji Kick. Spróbuj ponownie.', 502); }
+  try {
+    const response = await fetch(KICK_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code', client_id: env.KICK_CLIENT_ID,
+        client_secret: env.KICK_CLIENT_SECRET, redirect_uri: env.REDIRECT_URI,
+        code, code_verifier: pending.verifier,
+      }),
+    });
+    tokens = await parseJsonResponse(response, 'Wymiana kodu OAuth');
+    if (!await zakonczTokenOAuth(env, state, rezerwacja.id)) {
+      throw new Error('Nie udało się zatwierdzić wykorzystania stanu OAuth.');
+    }
+  } catch (error) {
+    await zwolnijTokenOAuth(env, state, rezerwacja.id).catch((releaseError) => {
+      console.error('Nie udało się zwolnić rezerwacji OAuth:', releaseError.message);
+    });
+    console.error('Wymiana kodu OAuth:', error.message);
+    return text('Nie udało się zakończyć autoryzacji Kick. Jeśli błąd się powtórzy, uruchom autoryzację ponownie.', 502);
+  }
   if (pending.discord_id) {
     try {
       const user = await kickCurrentUser(tokens.access_token);
