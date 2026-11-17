@@ -559,14 +559,40 @@ async function handleApi(request, env) {
   }
   if (url.pathname === '/api/admin/migrate-kv') {
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
-    const nieznaneParametry = [...url.searchParams.keys()].filter((parametr) => parametr !== 'dry_run');
+    const dozwoloneParametry = new Set([
+      'dry_run', 'links_cursor', 'subscriptions_cursor', 'links_done', 'subscriptions_done',
+    ]);
+    const nieznaneParametry = [...url.searchParams.keys()].filter((parametr) => !dozwoloneParametry.has(parametr));
     if (nieznaneParametry.length > 0) return json({ error: 'invalid_query_parameter' }, 400);
     if (request.body !== null) return json({ error: 'unexpected_request_body' }, 400);
+    for (const parametr of dozwoloneParametry) {
+      if (url.searchParams.getAll(parametr).length > 1) return json({ error: 'duplicate_query_parameter' }, 400);
+    }
     const parametryDryRun = url.searchParams.getAll('dry_run');
-    if (parametryDryRun.length > 1 || (parametryDryRun.length === 1 && !['true', 'false'].includes(parametryDryRun[0]))) {
+    if (parametryDryRun.length === 1 && !['true', 'false'].includes(parametryDryRun[0])) {
       return json({ error: 'invalid_dry_run' }, 400);
     }
     const dryRun = parametryDryRun[0] !== 'false';
+    const parametryPaginacji = ['links_cursor', 'subscriptions_cursor', 'links_done', 'subscriptions_done'];
+    if (!dryRun && parametryPaginacji.some((parametr) => url.searchParams.has(parametr))) {
+      return json({ error: 'pagination_only_available_for_dry_run' }, 400);
+    }
+    for (const parametr of ['links_done', 'subscriptions_done']) {
+      const wartosc = url.searchParams.get(parametr);
+      if (wartosc !== null && !['true', 'false'].includes(wartosc)) {
+        return json({ error: 'invalid_pagination_flag' }, 400);
+      }
+    }
+    for (const parametr of ['links_cursor', 'subscriptions_cursor']) {
+      const wartosc = url.searchParams.get(parametr);
+      if (wartosc !== null && (!wartosc || wartosc.length > 2048)) {
+        return json({ error: 'invalid_pagination_cursor' }, 400);
+      }
+    }
+    if (
+      (url.searchParams.get('links_done') === 'true' && url.searchParams.has('links_cursor'))
+      || (url.searchParams.get('subscriptions_done') === 'true' && url.searchParams.has('subscriptions_cursor'))
+    ) return json({ error: 'conflicting_pagination_parameters' }, 400);
     const repo = repozytorium(env, true);
     if (!repo) return json({ error: 'd1_not_configured' }, 503);
     const tokenDoMigracji = await pobierzTokenMigracji({
@@ -830,9 +856,23 @@ async function handleApi(request, env) {
     };
     const discordIds = new Set();
     const kickIds = new Set();
-    let cursor;
-    do {
-      const page = await env.SUBS_KV.list({ prefix: 'link:discord:', cursor, limit: 500 });
+    const dryRunPageLimit = 12;
+    let linksComplete = url.searchParams.get('links_done') === 'true';
+    let subscriptionsComplete = url.searchParams.get('subscriptions_done') === 'true';
+    let linksCursor = url.searchParams.get('links_cursor') || null;
+    let subscriptionsCursor = url.searchParams.get('subscriptions_cursor') || null;
+
+    if (!linksComplete) {
+      const page = await env.SUBS_KV.list({
+        prefix: 'link:discord:', cursor: linksCursor || undefined, limit: dryRunPageLimit,
+      });
+      if (
+        !page || !Array.isArray(page.keys) || page.keys.length > dryRunPageLimit
+        || typeof page.list_complete !== 'boolean'
+        || (!page.list_complete && (
+          typeof page.cursor !== 'string' || !page.cursor || page.cursor.length > 2048
+        ))
+      ) throw new Error('KV zwróciło niekompletną lub nieprawidłową stronę linków.');
       for (const key of page.keys) {
         raport.links_seen++;
         const record = await env.SUBS_KV.get(key.name, 'json');
@@ -841,9 +881,9 @@ async function handleApi(request, env) {
         const kickId = String(record?.kick_user_id || '');
         const username = record?.username;
         if (
-          !/^\d{17,20}$/.test(discordIdZKlucza)
+          !/^\\d{17,20}$/.test(discordIdZKlucza)
           || discordId !== discordIdZKlucza
-          || !/^\d{17,20}$/.test(discordId)
+          || !/^\\d{17,20}$/.test(discordId)
           || !/^[0-9]{1,32}$/.test(kickId)
           || typeof username !== 'string' || !USERNAME_RE.test(username)
         ) {
@@ -859,27 +899,22 @@ async function handleApi(request, env) {
         discordIds.add(discordId);
         kickIds.add(kickId);
         raport.links_valid++;
-        if (!dryRun) {
-          try {
-            await repo.polaczKonto({
-              broadcasterId: owner.user_id,
-              discordUserId: discordId,
-              kickUserId: kickId,
-              kickUsername: username,
-            });
-            raport.links_imported++;
-          } catch (error) {
-            raport.links_skipped++;
-            if (raport.errors.length < 50) dodajBlad('link', key.name, String(error.message).slice(0, 160));
-          }
-        }
       }
-      cursor = page.list_complete ? undefined : page.cursor;
-    } while (cursor);
+      linksComplete = page.list_complete;
+      linksCursor = page.list_complete ? null : page.cursor;
+    }
 
-    cursor = undefined;
-    do {
-      const page = await env.SUBS_KV.list({ prefix: 'sub:', cursor, limit: 500 });
+    if (!subscriptionsComplete) {
+      const page = await env.SUBS_KV.list({
+        prefix: 'sub:', cursor: subscriptionsCursor || undefined, limit: dryRunPageLimit,
+      });
+      if (
+        !page || !Array.isArray(page.keys) || page.keys.length > dryRunPageLimit
+        || typeof page.list_complete !== 'boolean'
+        || (!page.list_complete && (
+          typeof page.cursor !== 'string' || !page.cursor || page.cursor.length > 2048
+        ))
+      ) throw new Error('KV zwróciło niekompletną lub nieprawidłową stronę subskrypcji.');
       for (const key of page.keys) {
         if (key.name.startsWith('sub:user_id:')) continue;
         raport.subscriptions_seen++;
@@ -898,24 +933,19 @@ async function handleApi(request, env) {
           continue;
         }
         raport.subscriptions_valid++;
-        if (!dryRun) {
-          try {
-            await repo.zapiszSubskrypcje({
-              broadcasterId: owner.user_id,
-              kickUserId: kickId,
-              kickUsername: username,
-              expiresAtMs: expiry,
-              source: ['channel.subscription.new', 'channel.subscription.renewal', 'channel.subscription.gifts', 'gift', 'new', 'renewal', 'admin'].includes(record.source) ? record.source : 'admin',
-            });
-            raport.subscriptions_imported++;
-          } catch (error) {
-            dodajBlad('subscription', key.name, String(error.message).slice(0, 160));
-          }
-        }
       }
-      cursor = page.list_complete ? undefined : page.cursor;
-    } while (cursor);
-    return json(raport);
+      subscriptionsComplete = page.list_complete;
+      subscriptionsCursor = page.list_complete ? null : page.cursor;
+    }
+    return json({
+      ...raport,
+      links_complete: linksComplete,
+      subscriptions_complete: subscriptionsComplete,
+      has_more: !linksComplete || !subscriptionsComplete,
+      links_cursor: linksCursor,
+      subscriptions_cursor: subscriptionsCursor,
+      duplicate_check_scope: 'current_page',
+    });
   }
   if (url.pathname === '/api/links') {
     const repo = repozytorium(env);
