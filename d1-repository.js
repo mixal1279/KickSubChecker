@@ -303,13 +303,19 @@ export function utworzRepozytoriumD1(db) {
       if (typeof sourceKey !== 'string' || !sourceKey.startsWith('link:discord:') || sourceKey.length > 256) throw new TypeError('Nieprawidłowy klucz źródłowy powiązania.');
       const teraz = Date.now();
       const wyniki = await db.batch([
-        db.prepare(`INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms) VALUES (?, 'links', ?, ?)`).bind(kanal, sourceKey, teraz),
         db.prepare(`
           INSERT INTO account_links (broadcaster_id, discord_user_id, kick_user_id, kick_username, linked_at_ms, updated_at_ms)
-          SELECT ?, ?, ?, ?, ?, ?
-          WHERE EXISTS (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ?)
+          VALUES (?, ?, ?, ?, ?, ?)
           ON CONFLICT DO NOTHING
-        `).bind(kanal, discord, kick, nick, teraz, teraz, kanal, sourceKey),
+        `).bind(kanal, discord, kick, nick, teraz, teraz),
+        db.prepare(`
+          INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms)
+          SELECT ?, 'links', ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM account_links
+            WHERE broadcaster_id = ? AND discord_user_id = ? AND kick_user_id = ?
+          )
+        `).bind(kanal, sourceKey, teraz, kanal, discord, kick),
       ]);
       wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Idempotentny import powiązania (operacja ${i + 1})`));
       return Number(wyniki[0]?.meta?.changes || 0) === 1;
