@@ -321,3 +321,15 @@ test('import migracyjny odrzuca klucz spoza właściwego prefiksu przed SQL', as
   }), /klucz źródłowy/);
   assert.equal(db.wywolania.length, 0);
 });
+
+
+test('liczniki migracji są pobierane z trwałych markerów D1', async () => {
+  const db = utworzFakeD1({ pierwszy: { links: 3, subscriptions: 7, total: 10 } });
+  const repo = utworzRepozytoriumD1(db);
+  assert.deepEqual(await repo.policzElementyMigracji({ broadcasterId: '12345' }), {
+    links: 3, subscriptions: 7, total: 10,
+  });
+  assert.equal(db.wywolania[0].typ, 'first');
+  assert.match(db.wywolania[0].sql, /FROM migration_items/);
+  assert.deepEqual(db.wywolania[0].args, ['12345']);
+});
