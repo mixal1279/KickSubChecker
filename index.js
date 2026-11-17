@@ -584,9 +584,21 @@ async function handleApi(request, env) {
         }
         let counts;
         try {
-          counts = JSON.parse(stan.counts_json || '{}');
+          if (typeof stan.counts_json !== 'string') throw new Error('invalid_counts_type');
+          counts = JSON.parse(stan.counts_json);
         } catch {
           throw new Error('Nieprawidłowe liczniki zapisane w stanie migracji.');
+        }
+        if (!counts || typeof counts !== 'object' || Array.isArray(counts)) {
+          throw new Error('Liczniki migracji muszą być obiektem JSON.');
+        }
+        if (!['links', 'subscriptions', 'completed'].includes(stan.phase)) {
+          throw new Error('Nieprawidłowa faza zapisana w stanie migracji.');
+        }
+        if (stan.cursor != null && (
+          typeof stan.cursor !== 'string' || !stan.cursor || stan.cursor.length > 2048
+        )) {
+          throw new Error('Nieprawidłowy kursor zapisany w stanie migracji.');
         }
         const polaLicznikow = [
           'links_seen', 'links_valid', 'links_imported', 'links_skipped', 'links_conflicts',
@@ -614,11 +626,44 @@ async function handleApi(request, env) {
         const dodajBlad = (typ, key, reason) => {
           if (raport.errors.length < 50) raport.errors.push({ type: typ, key, reason });
         };
-        const phase = stan.phase === 'subscriptions' ? 'subscriptions' : 'links';
+        // Po zapisaniu końcowego checkpointu wznowienie ma wykonać wyłącznie finalizację.
+        // Nie wolno wracać do fazy links, bo ponowne liczenie stron podwoiłoby liczniki.
+        if (stan.phase === 'completed') {
+          const trwaleZaimportowane = await repo.policzElementyMigracji({ broadcasterId: owner.user_id });
+          const oczekiwaneLinki = raport.links_valid - raport.links_conflicts;
+          if (
+            oczekiwaneLinki < 0
+            || trwaleZaimportowane.links !== oczekiwaneLinki
+            || trwaleZaimportowane.subscriptions !== raport.subscriptions_valid
+          ) {
+            throw new Error('Niezgodność liczby zaimportowanych rekordów KV i trwałych markerów D1.');
+          }
+          raport.links_imported = trwaleZaimportowane.links;
+          raport.subscriptions_imported = trwaleZaimportowane.subscriptions;
+          const zakonczono = await repo.zakonczMigracje({
+            broadcasterId: owner.user_id, leaseToken, teraz: Date.now(),
+          });
+          if (!zakonczono) return json({ error: 'migration_lease_lost' }, 409);
+          return json({
+            success: true, complete: true, phase: 'completed',
+            has_more: false, processed_this_request: 0, ...raport,
+          });
+        }
+
+        const phase = stan.phase;
         const prefix = phase === 'links' ? 'link:discord:' : 'sub:';
         const page = await env.SUBS_KV.list({
           prefix, cursor: stan.cursor || undefined, limit: 50,
         });
+        if (
+          !page || !Array.isArray(page.keys) || page.keys.length > 50
+          || typeof page.list_complete !== 'boolean'
+          || (!page.list_complete && (
+            typeof page.cursor !== 'string' || !page.cursor || page.cursor.length > 2048
+          ))
+        ) {
+          throw new Error('KV zwróciło niekompletną lub nieprawidłową stronę migracji.');
+        }
 
         if (phase === 'links') {
           for (const key of page.keys) {
