@@ -103,7 +103,7 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
     },
     async batch(polecenia) {
       wywolania.push({ typ: 'batch', liczba: polecenia.length });
-      if (bladImportBatchRaz && polecenia.length === 2 && polecenia[0].sql.includes('INSERT INTO account_links')) {
+      if (bladImportBatchRaz && polecenia.length === 3 && polecenia[0].sql.includes('INSERT INTO account_links')) {
         bladImportBatchRaz = false;
         throw new Error('symulowana awaria D1 batch');
       }
