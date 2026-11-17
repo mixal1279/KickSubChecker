@@ -54,7 +54,7 @@ Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa w
 6. Porównaj liczbę rekordów i sprawdź konta testowe po nicku oraz po ID.
 7. Dopiero po walidacji ustaw `D1_ENABLED = "true"` i wykonaj kontrolowane wdrożenie.
 
-Endpoint migracyjny wymaga Bearer secret bota. Nie umieszczaj sekretu w repozytorium ani w logach. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje OAuth i stan pomocniczy.
+Endpoint migracyjny wymaga osobnego `ADMIN_API_SECRET`, niezależnego od `BOT_API_SECRET` i nieudostępnianego botowi. Nie umieszczaj sekretów w repozytorium ani w logach. Ustaw go w Cloudflare jako secret przed użyciem endpointu. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje OAuth i stan pomocniczy.
 
 
 ## Dodatkowe zabezpieczenia webhooków
