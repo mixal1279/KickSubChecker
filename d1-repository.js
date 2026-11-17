@@ -294,6 +294,55 @@ export function utworzRepozytoriumD1(db) {
     },
 
 
+
+    async importujPowiazanieMigracja({ broadcasterId, sourceKey, discordUserId, kickUserId, kickUsername }) {
+      const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
+      const discord = wymagajId(discordUserId, 'ID użytkownika Discord');
+      const kick = wymagajId(kickUserId, 'ID użytkownika Kick');
+      const nick = normalizujNick(kickUsername);
+      if (typeof sourceKey !== 'string' || !sourceKey.startsWith('link:discord:') || sourceKey.length > 256) throw new TypeError('Nieprawidłowy klucz źródłowy powiązania.');
+      const teraz = Date.now();
+      const wyniki = await db.batch([
+        db.prepare(`INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms) VALUES (?, 'links', ?, ?)`).bind(kanal, sourceKey, teraz),
+        db.prepare(`
+          INSERT INTO account_links (broadcaster_id, discord_user_id, kick_user_id, kick_username, linked_at_ms, updated_at_ms)
+          SELECT ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ?)
+          ON CONFLICT DO NOTHING
+        `).bind(kanal, discord, kick, nick, teraz, teraz, kanal, sourceKey),
+      ]);
+      wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Idempotentny import powiązania (operacja ${i + 1})`));
+      return Number(wyniki[0]?.meta?.changes || 0) === 1;
+    },
+
+    async importujSubskrypcjeMigracja({ broadcasterId, sourceKey, kickUserId, kickUsername, expiresAtMs, source }) {
+      const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
+      const nick = normalizujNick(kickUsername);
+      const kickId = kickUserId == null ? null : wymagajId(kickUserId, 'ID użytkownika Kick');
+      const expiry = Number(expiresAtMs);
+      if (!Number.isSafeInteger(expiry) || expiry <= 0) throw new TypeError('Nieprawidłowa data wygaśnięcia subskrypcji.');
+      if (!SOURCE_TYPES.has(source)) throw new TypeError('Nieobsługiwane źródło subskrypcji.');
+      if (typeof sourceKey !== 'string' || !sourceKey.startsWith('sub:') || sourceKey.length > 256) throw new TypeError('Nieprawidłowy klucz źródłowy subskrypcji.');
+      const teraz = Date.now();
+      const klucz = kickId ? `id:${kickId}` : `name:${nick.toLowerCase()}`;
+      const wyniki = await db.batch([
+        db.prepare(`INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms) VALUES (?, 'subscriptions', ?, ?)`).bind(kanal, sourceKey, teraz),
+        db.prepare(`
+          INSERT INTO subscriptions (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
+          SELECT ?, ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?)
+          ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
+            kick_user_id = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN COALESCE(excluded.kick_user_id, subscriptions.kick_user_id) ELSE subscriptions.kick_user_id END,
+            kick_username = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.kick_username ELSE subscriptions.kick_username END,
+            expires_at_ms = MAX(subscriptions.expires_at_ms, excluded.expires_at_ms),
+            source = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.source ELSE subscriptions.source END,
+            updated_at_ms = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms END
+        `).bind(kanal, klucz, kickId, nick, expiry, source, teraz, kanal, sourceKey),
+      ]);
+      wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Idempotentny import subskrypcji (operacja ${i + 1})`));
+      return Number(wyniki[0]?.meta?.changes || 0) === 1;
+    },
+
     async przejmijMigracje({ broadcasterId, leaseToken, teraz = Date.now(), leaseMs = 60_000 }) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
       if (typeof leaseToken !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(leaseToken)) {
