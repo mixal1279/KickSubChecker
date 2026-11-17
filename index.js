@@ -606,6 +606,9 @@ async function handleApi(request, env) {
       (url.searchParams.get('links_done') === 'true' && url.searchParams.has('links_cursor'))
       || (url.searchParams.get('subscriptions_done') === 'true' && url.searchParams.has('subscriptions_cursor'))
     ) return json({ error: 'conflicting_pagination_parameters' }, 400);
+    if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function' || typeof env.SUBS_KV.list !== 'function') {
+      return json({ error: 'kv_not_configured' }, 503);
+    }
     const repo = repozytorium(env, true);
     if (!repo) return json({ error: 'd1_not_configured' }, 503);
     const tokenDoMigracji = await pobierzTokenMigracji({
