@@ -8,9 +8,13 @@ const bazaId = process.env.D1_TEST_DATABASE_ID || '';
 const oczekiwaneKontoId = '1bf7a2788e0a1d36e5aebc15ecf56f9f';
 const oczekiwanaBazaId = '232c709f-b295-4b36-956a-dcbe4efd2029';
 const produkcyjnaBazaId = '8130d703-3197-41c4-b480-5dabdbf062a7';
-const skonfigurowano = Boolean(kontoId && tokenApi && bazaId);
+const konfiguracjaD1 = [kontoId, tokenApi, bazaId];
+const skonfigurowano = konfiguracjaD1.every(Boolean);
 const pobierzCloudflare = globalThis.fetch.bind(globalThis);
 
+if (konfiguracjaD1.some(Boolean) && !skonfigurowano) {
+  throw new Error('Test D1 wymaga jednoczesnej konfiguracji account ID, API tokenu i testowego database ID.');
+}
 if (bazaId === produkcyjnaBazaId) {
   throw new Error('Test handlera migracji odmawia pracy na produkcyjnej D1.');
 }
@@ -79,7 +83,10 @@ class AdapterD1Rest {
   async batch(statements) {
     this.calls++;
     return zapytajCloudflare(this.path, {
-      batch: statements.map(({ sql, params = [] }) => ({ sql, params })),
+      batch: statements.map(({ sql, params = [] }) => ({
+        sql,
+        params: params.map((wartosc) => String(wartosc)),
+      })),
     });
   }
 }
