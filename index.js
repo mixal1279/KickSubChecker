@@ -944,6 +944,7 @@ async function handleApi(request, env) {
       has_more: !linksComplete || !subscriptionsComplete,
       links_cursor: linksCursor,
       subscriptions_cursor: subscriptionsCursor,
+      counts_scope: 'current_page',
       duplicate_check_scope: 'current_page',
     });
   }
