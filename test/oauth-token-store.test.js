@@ -4,9 +4,16 @@ import { OAuthTokenStore } from '../oauth-token-store.js';
 
 function utworzMagazyn() {
   const dane = new Map();
+  let alarm = null;
   let kolejka = Promise.resolve();
   const ctx = {
     storage: {
+      async setAlarm(czas) { alarm = czas; },
+      async list({ prefix }) {
+        return new Map([...dane.entries()].filter(([klucz]) => klucz.startsWith(prefix)));
+      },
+      async delete(klucz) { return dane.delete(klucz); },
+      async getAlarm() { return alarm; },
       transaction(fn) {
         const wynik = kolejka.then(() => fn({
           async get(klucz) { return dane.get(klucz); },
@@ -18,13 +25,14 @@ function utworzMagazyn() {
       },
     },
   };
-  return new OAuthTokenStore(ctx, {});
+  const magazyn = new OAuthTokenStore(ctx, {});
+  return { magazyn, dane, pobierzAlarm: () => alarm };
 }
 
 const token = 'AbCdEfGhIjKlMnOpQrStUvWx';
 
 test('token można zużyć dokładnie jeden raz', async () => {
-  const magazyn = utworzMagazyn();
+  const { magazyn } = utworzMagazyn();
   const dane = { verifier: 'sekret-pkce', discord_id: '12345678901234567' };
   await magazyn.zapisz(token, 'oauth-state', dane, Date.now() + 60_000);
   const wyniki = await Promise.all([
@@ -36,21 +44,21 @@ test('token można zużyć dokładnie jeden raz', async () => {
 });
 
 test('token wygasły jest usuwany i nie może być użyty', async () => {
-  const magazyn = utworzMagazyn();
+  const { magazyn } = utworzMagazyn();
   await magazyn.zapisz(token, 'owner-start', { created_at: 1 }, 10_000);
   assert.equal(await magazyn.zuzyj(token, 'owner-start', 10_000), null);
   assert.equal(await magazyn.zuzyj(token, 'owner-start', 10_001), null);
 });
 
 test('token o innym typie jest kasowany bez ujawnienia danych', async () => {
-  const magazyn = utworzMagazyn();
+  const { magazyn } = utworzMagazyn();
   await magazyn.zapisz(token, 'link-start', { discord_id: '12345678901234567' }, Date.now() + 60_000);
   assert.equal(await magazyn.zuzyj(token, 'oauth-state'), null);
   assert.equal(await magazyn.zuzyj(token, 'link-start'), null);
 });
 
 test('nie pozwala nadpisać istniejącego tokena', async () => {
-  const magazyn = utworzMagazyn();
+  const { magazyn } = utworzMagazyn();
   await magazyn.zapisz(token, 'oauth-state', { verifier: 'pierwszy' }, Date.now() + 60_000);
   await assert.rejects(
     magazyn.zapisz(token, 'oauth-state', { verifier: 'drugi' }, Date.now() + 60_000),
@@ -60,14 +68,14 @@ test('nie pozwala nadpisać istniejącego tokena', async () => {
 });
 
 test('odrzuca nieprawidłowe dane wejściowe przed zapisem', async () => {
-  const magazyn = utworzMagazyn();
+  const { magazyn } = utworzMagazyn();
   await assert.rejects(magazyn.zapisz('krótki', 'oauth-state', {}, Date.now() + 60_000), /token/);
   await assert.rejects(magazyn.zapisz(token, 'nieznany', {}, Date.now() + 60_000), /typ tokena/);
   await assert.rejects(magazyn.zapisz(token, 'oauth-state', {}, Date.now() - 1), /wygaśnięcia/);
 });
 
 test('równoległe callbacki dostają tylko jedną aktywną rezerwację', async () => {
-  const magazyn = utworzMagazyn();
+  const { magazyn } = utworzMagazyn();
   await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, Date.now() + 60_000);
   const rezerwacje = await Promise.all([
     magazyn.zarezerwuj(token, 'oauth-state'),
@@ -78,7 +86,7 @@ test('równoległe callbacki dostają tylko jedną aktywną rezerwację', async 
 });
 
 test('nieudana wymiana kodu zwalnia rezerwację do ponowienia', async () => {
-  const magazyn = utworzMagazyn();
+  const { magazyn } = utworzMagazyn();
   await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, Date.now() + 60_000);
   const pierwsza = await magazyn.zarezerwuj(token, 'oauth-state');
   assert.ok(pierwsza);
@@ -92,7 +100,7 @@ test('nieudana wymiana kodu zwalnia rezerwację do ponowienia', async () => {
 });
 
 test('wygasła rezerwacja może zostać przejęta po upływie lease', async () => {
-  const magazyn = utworzMagazyn();
+  const { magazyn } = utworzMagazyn();
   await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, 100_000);
   const pierwsza = await magazyn.zarezerwuj(token, 'oauth-state', 1_000, 5_000);
   assert.ok(pierwsza);
@@ -100,4 +108,10 @@ test('wygasła rezerwacja może zostać przejęta po upływie lease', async () =
   assert.ok(druga);
   assert.notEqual(druga.id, pierwsza.id);
   assert.equal(await magazyn.zakoncz(token, 'oauth-state', pierwsza.id), false);
+});
+
+test('zapis tokena ustawia alarm porządkowy', async () => {
+  const stan = utworzMagazyn();
+  await stan.magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, Date.now() + 60_000);
+  assert.ok(stan.pobierzAlarm() > Date.now());
 });
