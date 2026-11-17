@@ -672,8 +672,10 @@ async function handleApi(request, env) {
 
         const phase = stan.phase;
         const prefix = phase === 'links' ? 'link:discord:' : 'sub:';
+        // 20 rekordów × (D1 batch + odczyt markera) + operacje lease/checkpoint
+        // utrzymują zapytania D1 poniżej limitu 50 na Worker invocation w planie Free.
         const page = await env.SUBS_KV.list({
-          prefix, cursor: stan.cursor || undefined, limit: 50,
+          prefix, cursor: stan.cursor || undefined, limit: 20,
         });
         if (
           !page || !Array.isArray(page.keys) || page.keys.length > 50
