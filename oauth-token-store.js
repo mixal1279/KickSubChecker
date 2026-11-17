@@ -1,10 +1,22 @@
 /**
  * Shardowany magazyn jednorazowych tokenów OAuth.
- * Każdy shard obsługuje część tokenów; odczyt i usunięcie są jedną transakcją DO.
+ * SQLite DO zapewnia atomowy read-modify-write w transactionSync.
  */
 export class OAuthTokenStore {
   constructor(ctx, _env) {
     this.ctx = ctx;
+    this.sql = ctx.storage.sql;
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_tokens (
+        token TEXT PRIMARY KEY,
+        typ TEXT NOT NULL,
+        dane TEXT NOT NULL,
+        wygasa_at INTEGER NOT NULL,
+        rezerwacja_id TEXT,
+        rezerwacja_do INTEGER
+      )
+    `);
+    this.sql.exec('CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expiry ON oauth_tokens(wygasa_at)');
   }
 
   async zapisz(token, typ, dane, wygasaAt) {
@@ -15,31 +27,24 @@ export class OAuthTokenStore {
     if (!Number.isSafeInteger(wygasaAt) || wygasaAt <= Date.now()) {
       throw new TypeError('Nieprawidłowy termin wygaśnięcia tokena.');
     }
-
-    const klucz = `jednorazowy:${token}`;
-    await this.ctx.storage.transaction(async (tx) => {
-      const istniejacy = await tx.get(klucz);
-      if (istniejacy) throw new Error('Token jednorazowy już istnieje.');
-      await tx.put(klucz, { typ, dane, wygasa_at: wygasaAt });
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        'INSERT INTO oauth_tokens (token, typ, dane, wygasa_at) VALUES (?, ?, ?, ?)',
+        token, typ, JSON.stringify(dane), wygasaAt,
+      );
     });
-    // Alarm shardu usuwa niezużyte wpisy; czas ważności i tak jest sprawdzany przy odczycie.
     await this.ctx.storage.setAlarm(Date.now() + 60_000);
     return true;
   }
 
   async alarm() {
     const teraz = Date.now();
-    const wpisy = await this.ctx.storage.list({ prefix: 'jednorazowy:' });
-    let najblizszeWygasniecie = null;
-    for (const [klucz, wpis] of wpisy) {
-      if (!Number.isSafeInteger(wpis?.wygasa_at) || wpis.wygasa_at <= teraz) {
-        await this.ctx.storage.delete(klucz);
-      } else if (najblizszeWygasniecie === null || wpis.wygasa_at < najblizszeWygasniecie) {
-        najblizszeWygasniecie = wpis.wygasa_at;
-      }
-    }
-    if (najblizszeWygasniecie !== null) {
-      await this.ctx.storage.setAlarm(najblizszeWygasniecie);
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec('DELETE FROM oauth_tokens WHERE wygasa_at <= ?', teraz);
+    });
+    const wynik = this.sql.exec('SELECT MIN(wygasa_at) AS najblizsze FROM oauth_tokens').toArray()[0];
+    if (Number.isSafeInteger(wynik?.najblizsze)) {
+      await this.ctx.storage.setAlarm(wynik.najblizsze);
     }
   }
 
@@ -57,42 +62,46 @@ export class OAuthTokenStore {
       throw new TypeError('Nieprawidłowe parametry rezerwacji tokena.');
     }
 
-    const klucz = `jednorazowy:${token}`;
-    return this.ctx.storage.transaction(async (tx) => {
-      const wpis = await tx.get(klucz);
-      if (!wpis || wpis.typ !== typ || !Number.isSafeInteger(wpis.wygasa_at) || wpis.wygasa_at <= teraz) {
-        if (wpis) await tx.delete(klucz);
+    return this.ctx.storage.transactionSync(() => {
+      const wpis = this.sql.exec(
+        'SELECT typ, dane, wygasa_at, rezerwacja_do FROM oauth_tokens WHERE token = ?',
+        token,
+      ).toArray()[0];
+      if (!wpis || wpis.typ !== typ || wpis.wygasa_at <= teraz) {
+        if (wpis) this.sql.exec('DELETE FROM oauth_tokens WHERE token = ?', token);
         return null;
       }
-      if (wpis.rezerwacja_do > teraz) return null;
+      if (wpis.rezerwacja_do != null && wpis.rezerwacja_do > teraz) return null;
       const id = crypto.randomUUID();
-      await tx.put(klucz, { ...wpis, rezerwacja_id: id, rezerwacja_do: teraz + czasRezerwacji });
-      return { id, dane: wpis.dane };
+      this.sql.exec(
+        'UPDATE oauth_tokens SET rezerwacja_id = ?, rezerwacja_do = ? WHERE token = ?',
+        id, teraz + czasRezerwacji, token,
+      );
+      return { id, dane: JSON.parse(wpis.dane) };
     });
   }
 
   async zakoncz(token, typ, id) {
     this.#sprawdz(token, typ);
     if (typeof id !== 'string' || id.length > 64) return false;
-    const klucz = `jednorazowy:${token}`;
-    return this.ctx.storage.transaction(async (tx) => {
-      const wpis = await tx.get(klucz);
-      if (!wpis || wpis.typ !== typ || wpis.rezerwacja_id !== id) return false;
-      await tx.delete(klucz);
-      return true;
+    return this.ctx.storage.transactionSync(() => {
+      const usuniete = this.sql.exec(
+        'DELETE FROM oauth_tokens WHERE token = ? AND typ = ? AND rezerwacja_id = ? RETURNING token',
+        token, typ, id,
+      ).toArray();
+      return usuniete.length === 1;
     });
   }
 
   async zwolnij(token, typ, id) {
     this.#sprawdz(token, typ);
     if (typeof id !== 'string' || id.length > 64) return false;
-    const klucz = `jednorazowy:${token}`;
-    return this.ctx.storage.transaction(async (tx) => {
-      const wpis = await tx.get(klucz);
-      if (!wpis || wpis.typ !== typ || wpis.rezerwacja_id !== id) return false;
-      const { rezerwacja_id: _id, rezerwacja_do: _do, ...dostepny } = wpis;
-      await tx.put(klucz, dostepny);
-      return true;
+    return this.ctx.storage.transactionSync(() => {
+      const zmienione = this.sql.exec(
+        'UPDATE oauth_tokens SET rezerwacja_id = NULL, rezerwacja_do = NULL WHERE token = ? AND typ = ? AND rezerwacja_id = ? RETURNING token',
+        token, typ, id,
+      ).toArray();
+      return zmienione.length === 1;
     });
   }
 
