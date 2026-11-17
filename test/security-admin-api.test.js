@@ -100,3 +100,17 @@ test('dry-run odrzuca cursor i flage ukończenia tego samego prefiksu jednocześ
   assert.equal(response.status, 400);
   assert.deepEqual(await response.json(), { error: 'conflicting_pagination_parameters' });
 });
+
+
+test('identyczny sekret bota i administratora blokuje dostęp administracyjny', async () => {
+  const response = await worker.fetch(new Request(workerUrl, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer shared-secret' },
+  }), {
+    ADMIN_API_SECRET: 'shared-secret',
+    BOT_API_SECRET: 'shared-secret',
+  });
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: 'unauthorized' });
+});
