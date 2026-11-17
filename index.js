@@ -1,5 +1,6 @@
 /** Kick Sub Checker — Cloudflare Worker. */
 import { utworzRepozytoriumD1 } from './d1-repository.js';
+export { OAuthTokenStore } from './oauth-token-store.js';
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
 function magazynTokenow(env, token) {
