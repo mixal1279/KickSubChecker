@@ -189,6 +189,24 @@ test('endpoint dry-run odrzuca niepoprawny broadcaster ID z odpowiedzi Kick', as
   }
 });
 
+test('endpoint migracji odmawia pracy bez kompletnego bindingu KV', async () => {
+  const przypadki = [
+    undefined,
+    { async get() { return null; } },
+  ];
+
+  for (const binding of przypadki) {
+    const { env, zapisyKv, wywolaniaD1 } = utworzEnv();
+    env.SUBS_KV = binding;
+    const response = await worker.fetch(utworzRequest(), env);
+
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: 'kv_not_configured' });
+    assert.deepEqual(zapisyKv, []);
+    assert.deepEqual(wywolaniaD1, []);
+  }
+});
+
 test('endpoint migracji odmawia pracy bez bindingu D1', async () => {
   const { env, zapisyKv, wywolaniaD1 } = utworzEnv();
   env.DB = undefined;
