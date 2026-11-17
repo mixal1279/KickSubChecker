@@ -71,7 +71,7 @@ Repozytorium D1 aktualizuje nick, ID, źródło i znacznik czasu subskrypcji tyl
 
 ## Jednorazowość OAuth — Durable Objects
 
-Tokeny `oauth-state`, `owner-start` i `link-start` są przechowywane w shardowanym Durable Object. Shard jest wybierany deterministycznie z pierwszego znaku losowego tokena, dzięki czemu operacje dla jednego tokena trafiają do tej samej instancji bez kierowania całego ruchu do jednego globalnego obiektu. Zapis i zużycie wykonują się w transakcji Durable Object: odczyt i usunięcie tokena są nierozdzielne, a równoległe callbacki nie mogą oba uzyskać tego samego wpisu.
+Tokeny `oauth-state`, `owner-start` i `link-start` są przechowywane w shardowanym Durable Object. Shard jest wybierany deterministycznie z pierwszego znaku losowego tokena, dzięki czemu operacje dla jednego tokena trafiają do tej samej instancji bez kierowania całego ruchu do jednego globalnego obiektu. Zapis, rezerwacja, zwolnienie i zużycie wykonują się w transakcjach Durable Object. Callback OAuth najpierw uzyskuje krótką rezerwację (lease), więc tylko jedno równoległe żądanie może wymieniać dany kod. Po błędzie wymiany rezerwacja jest zwalniana; po sukcesie token jest definitywnie zużywany. Awaria procesu zwalnia token do ponowienia po wygaśnięciu 60-sekundowej rezerwacji. Tokeny startowe linkowania i właściciela są konsumowane atomowo w jednej transakcji.
 
 Po dodaniu bindingu wymagane jest wdrożenie migracji `v1` Durable Object. Stare, jeszcze aktywne linki zapisane w KV nie będą rozpoznawane przez nową ścieżkę — przed przełączeniem należy odczekać co najmniej 10 minut od wydania ostatnich linków albo unieważnić je i wygenerować ponownie. Nie wdrażaj konfiguracji produkcyjnej bez wcześniejszego sprawdzenia namespace i migracji w środowisku testowym.
 
