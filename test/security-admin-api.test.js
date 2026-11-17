@@ -44,3 +44,38 @@ test('brak ADMIN_API_SECRET odmawia migracji przed dostępem do usług', async (
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: 'unauthorized' });
 });
+
+
+test('migrator odrzuca nieobsługiwane parametry query', async () => {
+  const response = await worker.fetch(new Request(workerUrl + '?broadcaster_id=999999999', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer admin-secret' },
+  }), { ADMIN_API_SECRET: 'admin-secret' });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'invalid_query_parameter' });
+});
+
+test('migrator odrzuca body zamiast ignorować niezwalidowane dane', async () => {
+  const response = await worker.fetch(new Request(workerUrl + '?dry_run=true', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer admin-secret',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ broadcaster_id: '999999999', dry_run: false }),
+  }), { ADMIN_API_SECRET: 'admin-secret' });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'unexpected_request_body' });
+});
+
+test('migrator odrzuca powtórzony parametr dry_run', async () => {
+  const response = await worker.fetch(new Request(workerUrl + '?dry_run=true&dry_run=false', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer admin-secret' },
+  }), { ADMIN_API_SECRET: 'admin-secret' });
+
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), { error: 'invalid_dry_run' });
+});
