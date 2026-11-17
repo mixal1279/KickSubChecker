@@ -284,9 +284,10 @@ test('import powiązania z KV używa markera idempotencji i nie tworzy audytu pr
   const batch = db.wywolania[0];
   assert.equal(batch.typ, 'batch');
   assert.equal(batch.polecenia.length, 2);
-  assert.match(batch.polecenia[0].sql, /INSERT OR IGNORE INTO migration_items/);
-  assert.match(batch.polecenia[1].sql, /INSERT INTO account_links/);
-  assert.match(batch.polecenia[1].sql, /ON CONFLICT DO NOTHING/);
+  assert.match(batch.polecenia[0].sql, /INSERT INTO account_links/);
+  assert.match(batch.polecenia[0].sql, /ON CONFLICT DO NOTHING/);
+  assert.match(batch.polecenia[1].sql, /INSERT OR IGNORE INTO migration_items/);
+  assert.match(batch.polecenia[1].sql, /WHERE EXISTS/);
   assert.doesNotMatch(batch.polecenia.map(x => x.sql).join(' '), /audit_log/);
 });
 
