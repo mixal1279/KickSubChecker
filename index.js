@@ -629,8 +629,12 @@ async function handleApi(request, env) {
               });
               raport.links_imported++;
             } catch (error) {
-              raport.links_skipped++;
-              dodajBlad('link', key.name, String(error.message).slice(0, 160));
+              if (/UNIQUE|constraint/i.test(String(error.message))) {
+                raport.links_skipped++;
+                dodajBlad('link', key.name, 'unique_conflict');
+              } else {
+                throw error;
+              }
             }
           }
         } else {
@@ -661,8 +665,7 @@ async function handleApi(request, env) {
               });
               raport.subscriptions_imported++;
             } catch (error) {
-              raport.subscriptions_skipped++;
-              dodajBlad('subscription', key.name, String(error.message).slice(0, 160));
+              throw error;
             }
           }
         }
