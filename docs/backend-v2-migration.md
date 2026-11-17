@@ -27,12 +27,26 @@ Odświeżanie OAuth zachowuje poprzedni refresh token, jeśli Kick nie zwróci n
 
 - `0001_backend_v2.sql` tworzy tabele kanałów, konfiguracji, powiązań, subskrypcji, webhooków i audytu.
 - `0002_legacy_subscription_sources.sql` rozszerza dozwolone źródła subskrypcji, zachowując rekordy już zapisane w D1. Wspiera stare wartości `gift`, `new`, `renewal` oraz nowe nazwy eventów Kick.
+- `0003_require_broadcaster_id.sql` dodaje triggery blokujące `NULL` w `channels.broadcaster_id` przy INSERT i UPDATE. Nie przebudowuje tabel ani nie modyfikuje istniejących rekordów.
 
-Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanej migracji 0001 — zmiany schematu wprowadzaj kolejnymi numerowanymi migracjami.
+Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanych migracji — zmiany schematu wprowadzaj kolejnymi numerowanymi migracjami. Migracje należy wykonywać dokładnie raz i zapisywać ich zastosowanie w dokumentacji wdrożenia; repozytorium nie ma jeszcze automatycznego rejestru migracji.
+
+## Testy integracyjne D1
+
+Test `test/d1-remote.integration.test.js` łączy się z Cloudflare D1 przez REST API i sprawdza rzeczywiste ograniczenia SQL, dozwolone źródła subskrypcji, unikalność powiązań, deduplikację webhooków, klucze obce oraz `ON DELETE CASCADE`.
+
+Test celowo odmawia pracy na produkcyjnej bazie i dodatkowo sprawdza, czy wskazana baza ma dokładną nazwę `kick-sub-checker-test`. Bez kompletu zmiennych środowiskowych test jest pomijany.
+
+W GitHub Actions dodaj sekrety repozytorium:
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN` — token z uprawnieniami do odczytu metadanych D1 oraz wykonywania zapytań D1;
+- `D1_TEST_DATABASE_ID` — ID bazy `kick-sub-checker-test`, nigdy produkcyjnej.
+
+Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa wyłącznie danych tymczasowych z unikalnym `broadcaster_id` i usuwa je w bloku `finally`.
 
 ## Kolejność bezpiecznego przełączenia
 
-1. Zastosuj migracje D1 `0001` i `0002` w środowisku docelowym.
+1. Zastosuj migracje D1 `0001`, `0002` i `0003` w środowisku docelowym.
 2. Ustaw `D1_ENABLED = "false"`. Nie wdrażaj przełączenia na produkcję na tym etapie.
 3. Uruchom `POST /api/admin/migrate-kv` (domyślnie dry-run).
 4. Sprawdź `links_skipped`, `subscriptions_seen`, `subscriptions_valid` i `errors`. Indeksy `sub:user_id:` są pomijane — importowane są tylko kanoniczne rekordy `sub:<username>`.
@@ -45,7 +59,7 @@ Endpoint migracyjny wymaga Bearer secret bota. Nie umieszczaj sekretu w repozyto
 ## Testy wymagane przed cutoverem
 
 - testy adaptera D1 i walidacji danych;
-- testy realnego D1 z zastosowanymi migracjami, nie tylko mock;
+- testy integracyjne z prawdziwym D1 opisane wyżej;
 - testy OAuth: zachowanie refresh tokena i weryfikacja oczekiwanego kanału;
 - testy `/api/check` po nicku i po ID;
 - testy webhooków: podpis, stary timestamp, duplikat, ponowienie po błędzie i zapis prezentów;
