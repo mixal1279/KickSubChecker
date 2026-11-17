@@ -147,16 +147,24 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
     const fk = await zapytaj('PRAGMA foreign_key_check');
     assert.deepEqual(fk.results, [], 'Baza nie może zawierać naruszeń kluczy obcych.');
 
-    await zapytaj('DELETE FROM channels WHERE broadcaster_id = ?', [broadcasterId]);
-    kanalUtworzony = false;
+  } finally {
+    if (kanalUtworzony) {
+      await zapytaj('DELETE FROM channels WHERE broadcaster_id = ?', [broadcasterId]);
+      kanalUtworzony = false;
+    }
 
-    for (const tabela of ['guild_configs', 'account_links', 'subscriptions', 'webhook_events', 'audit_log']) {
+    // Weryfikacja CASCADE jest wykonywana również po nieudanym asercie testu.
+    for (const tabela of [
+      'guild_configs', 'account_links', 'subscriptions', 'webhook_events',
+      'audit_log', 'migration_runs', 'migration_items',
+    ]) {
       const wynik = await zapytaj(`SELECT COUNT(*) AS liczba FROM ${tabela} WHERE broadcaster_id = ?`, [broadcasterId]);
       assert.equal(Number(wynik.results?.[0]?.liczba || 0), 0, `CASCADE nie wyczyścił tabeli ${tabela}.`);
     }
-  } finally {
-    if (kanalUtworzony) {
-      await zapytaj('DELETE FROM channels WHERE broadcaster_id = ?', [broadcasterId]).catch(() => {});
-    }
+    const kanal = await zapytaj(
+      'SELECT COUNT(*) AS liczba FROM channels WHERE broadcaster_id = ?',
+      [broadcasterId],
+    );
+    assert.equal(Number(kanal.results?.[0]?.liczba || 0), 0, 'Rekord kanału testowego pozostał w D1.');
   }
 });
