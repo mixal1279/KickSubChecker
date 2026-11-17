@@ -316,14 +316,14 @@ export function utworzRepozytoriumD1(db) {
             WHERE broadcaster_id = ? AND discord_user_id = ? AND kick_user_id = ?
           )
         `).bind(kanal, sourceKey, teraz, kanal, discord, kick),
+        db.prepare(`
+          SELECT 1 AS imported FROM migration_items
+          WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ?
+          LIMIT 1
+        `).bind(kanal, sourceKey),
       ]);
       wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Idempotentny import powiązania (operacja ${i + 1})`));
-      const marker = await db.prepare(`
-        SELECT 1 AS imported FROM migration_items
-        WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ?
-        LIMIT 1
-      `).bind(kanal, sourceKey).first();
-      return Boolean(marker?.imported);
+      return Boolean(wyniki[2]?.results?.[0]?.imported);
     },
 
     async importujSubskrypcjeMigracja({ broadcasterId, sourceKey, kickUserId, kickUsername, expiresAtMs, source }) {
@@ -349,14 +349,14 @@ export function utworzRepozytoriumD1(db) {
             source = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.source ELSE subscriptions.source END,
             updated_at_ms = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms END
         `).bind(kanal, klucz, kickId, nick, expiry, source, teraz, kanal, sourceKey),
+        db.prepare(`
+          SELECT 1 AS imported FROM migration_items
+          WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?
+          LIMIT 1
+        `).bind(kanal, sourceKey),
       ]);
       wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Idempotentny import subskrypcji (operacja ${i + 1})`));
-      const marker = await db.prepare(`
-        SELECT 1 AS imported FROM migration_items
-        WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?
-        LIMIT 1
-      `).bind(kanal, sourceKey).first();
-      return Boolean(marker?.imported);
+      return Boolean(wyniki[2]?.results?.[0]?.imported);
     },
 
 
