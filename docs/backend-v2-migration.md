@@ -37,7 +37,7 @@ Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanych migracji — zmia
 
 Import przetwarza maksymalnie 16 rekordów KV na jedno żądanie. Każdy rekord wymaga jednego odczytu KV i jednego atomowego `D1 batch`, który zawiera również odczyt markera. Końcowa strona zużywa około 22 wywołań D1 i 42 subrequests; przy odświeżaniu wygasłego OAuth budżet rośnie do około 46 subrequests. Pozostaje margines do limitu 50 subrequests na Worker invocation w planie Free.
 
-Dry-run jest również stronicowany: jedno żądanie sprawdza maksymalnie 12 rekordów powiązań i 12 rekordów subskrypcji. Zwraca `links_cursor`, `subscriptions_cursor`, flagi `links_complete` i `subscriptions_complete` oraz `has_more`. Kolejne żądanie przekazuje otrzymane cursory; ukończony prefiks oznacza przez `links_done=true` lub `subscriptions_done=true`. Liczniki i wykrywanie duplikatów dotyczą bieżącej strony (`duplicate_check_scope=current_page)); globalne konflikty są ostatecznie egzekwowane przez ograniczenia UNIQUE i import do D1. Dry-run nie zapisuje KV ani D1.
+Dry-run jest również stronicowany: jedno żądanie sprawdza maksymalnie 12 rekordów powiązań i 12 rekordów subskrypcji. Zwraca `links_cursor`, `subscriptions_cursor`, flagi `links_complete` i `subscriptions_complete` oraz `has_more`. Kolejne żądanie przekazuje otrzymane cursory; ukończony prefiks oznacza przez `links_done=true` lub `subscriptions_done=true`. Liczniki i wykrywanie duplikatów dotyczą bieżącej strony (`duplicate_check_scope=current_page`); globalne konflikty są ostatecznie egzekwowane przez ograniczenia UNIQUE i import do D1. Dry-run nie zapisuje KV ani D1.
 
 ## Testy integracyjne D1
 
