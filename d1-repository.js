@@ -318,7 +318,12 @@ export function utworzRepozytoriumD1(db) {
         `).bind(kanal, sourceKey, teraz, kanal, discord, kick),
       ]);
       wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Idempotentny import powiązania (operacja ${i + 1})`));
-      return Number(wyniki[0]?.meta?.changes || 0) === 1;
+      const marker = await db.prepare(`
+        SELECT 1 AS imported FROM migration_items
+        WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ?
+        LIMIT 1
+      `).bind(kanal, sourceKey).first();
+      return Boolean(marker?.imported);
     },
 
     async importujSubskrypcjeMigracja({ broadcasterId, sourceKey, kickUserId, kickUsername, expiresAtMs, source }) {
@@ -346,7 +351,12 @@ export function utworzRepozytoriumD1(db) {
         `).bind(kanal, klucz, kickId, nick, expiry, source, teraz, kanal, sourceKey),
       ]);
       wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Idempotentny import subskrypcji (operacja ${i + 1})`));
-      return Number(wyniki[0]?.meta?.changes || 0) === 1;
+      const marker = await db.prepare(`
+        SELECT 1 AS imported FROM migration_items
+        WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?
+        LIMIT 1
+      `).bind(kanal, sourceKey).first();
+      return Boolean(marker?.imported);
     },
 
 
