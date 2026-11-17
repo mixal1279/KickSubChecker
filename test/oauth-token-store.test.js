@@ -20,9 +20,9 @@ function utworzMagazyn() {
         return { toArray: () => wpis ? [{ typ: wpis.typ, dane: wpis.dane, wygasa_at: wpis.wygasa_at, rezerwacja_do: wpis.rezerwacja_do }] : [] };
       }
       if (q.startsWith('DELETE FROM OAUTH_TOKENS WHERE TOKEN = ? AND TYP = ? AND REZERWACJA_ID = ?')) {
-        const [token, typ, id] = args;
+        const [token, typ, id, teraz] = args;
         const wpis = dane.get(token);
-        if (!wpis || wpis.typ !== typ || wpis.rezerwacja_id !== id) return { toArray: () => [] };
+        if (!wpis || wpis.typ !== typ || wpis.rezerwacja_id !== id || wpis.rezerwacja_do <= teraz) return { toArray: () => [] };
         dane.delete(token);
         return { toArray: () => [{ token }] };
       }
