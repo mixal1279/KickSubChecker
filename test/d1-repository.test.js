@@ -412,3 +412,35 @@ test('wygasły lease może zostać odzyskany, ale aktywny lease pozostaje chroni
   assert.equal(await repo.przejmijMigracje({ broadcasterId: '12345', leaseToken: 'token-drugi-abcdefghijkl', teraz: 1_011_000, leaseMs: 10_000 }), true);
   assert.equal(stan.lease_token, 'token-drugi-abcdefghijkl');
 });
+
+
+test('kanał jest przygotowywany i lease przejmowany atomowo', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  assert.equal(await repo.zapewnijKanalIPrzejmijMigracje({
+    broadcasterId: '12345',
+    username: 'TestChannel',
+    leaseToken: 'abcdefghijklmnopqrstuvwx123456',
+    teraz: 1_000_000,
+    leaseMs: 60_000,
+  }), true);
+  const batch = db.wywolania.find((x) => x.typ === 'batch');
+  assert.ok(batch);
+  assert.equal(batch.polecenia.length, 2);
+  assert.match(batch.polecenia[0].sql, /INSERT INTO channels/);
+  assert.match(batch.polecenia[0].sql, /NOT EXISTS/);
+  assert.match(batch.polecenia[0].sql, /lease_expires_at_ms > \?/);
+  assert.match(batch.polecenia[1].sql, /INSERT INTO migration_runs/);
+  assert.match(batch.polecenia[1].sql, /lease_token = \?/);
+});
+
+test('atomowe przejęcie migracji odrzuca nieprawidłowy nick i nie wykonuje SQL', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await assert.rejects(repo.zapewnijKanalIPrzejmijMigracje({
+    broadcasterId: '12345',
+    username: 'zly nick',
+    leaseToken: 'abcdefghijklmnopqrstuvwx123456',
+  }), /nick Kick/);
+  assert.equal(db.wywolania.length, 0);
+});
