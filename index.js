@@ -1,6 +1,23 @@
 /** Kick Sub Checker — Cloudflare Worker. */
 import { utworzRepozytoriumD1 } from './d1-repository.js';
 
+const TOKEN_TTL_MS = 10 * 60 * 1000;
+function magazynTokenow(env, token) {
+  if (!env.OAUTH_TOKENS || typeof env.OAUTH_TOKENS.getByName !== 'function') {
+    throw new Error('Brak bindingu OAUTH_TOKENS — wymagane wdrożenie migracji Durable Object.');
+  }
+  if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(token)) {
+    throw new Error('Nieprawidłowy token jednorazowy.');
+  }
+  return env.OAUTH_TOKENS.getByName(`token-${token[0]}`);
+}
+async function zapiszTokenJednorazowy(env, token, typ, dane) {
+  return magazynTokenow(env, token).zapisz(token, typ, dane, Date.now() + TOKEN_TTL_MS);
+}
+async function zuzyjTokenJednorazowy(env, token, typ) {
+  return magazynTokenow(env, token).zuzyj(token, typ, Date.now());
+}
+
 const KICK_AUTHORIZE_URL = 'https://id.kick.com/oauth/authorize';
 const KICK_TOKEN_URL = 'https://id.kick.com/oauth/token';
 const KICK_USERS_URL = 'https://api.kick.com/public/v1/users';
@@ -135,19 +152,17 @@ async function handleAuthorize(request, env) {
   if (linkToken && ownerToken) return text('Nieprawidłowe parametry OAuth.', 400);
   if (linkToken) {
     if (!/^[A-Za-z0-9_-]{20,100}$/.test(linkToken)) return text('Nieprawidłowy lub wygasły link łączenia kont.', 403);
-    const pendingLink = await env.SUBS_KV.get(`link-start:${linkToken}`, 'json');
+    const pendingLink = await zuzyjTokenJednorazowy(env, linkToken, 'link-start');
     if (!pendingLink || !/^\d{17,20}$/.test(String(pendingLink.discord_id || ''))) return text('Link łączenia kont wygasł lub został już użyty. Uruchom /polacz-konto ponownie.', 403);
-    await env.SUBS_KV.delete(`link-start:${linkToken}`);
     linkDiscordId = String(pendingLink.discord_id);
   } else if (ownerToken) {
-    if (!/^[A-Za-z0-9_-]{20,100}$/.test(ownerToken) || !await env.SUBS_KV.get(`owner-start:${ownerToken}`)) return text('Link administracyjny wygasł lub został już użyty.', 403);
-    await env.SUBS_KV.delete(`owner-start:${ownerToken}`);
+    if (!/^[A-Za-z0-9_-]{20,100}$/.test(ownerToken) || !await zuzyjTokenJednorazowy(env, ownerToken, 'owner-start')) return text('Link administracyjny wygasł lub został już użyty.', 403);
     ownerFlow = true;
   } else {
     return text('Aby połączyć konto widza, użyj /polacz-konto na Discordzie. Autoryzację właściciela kanału uruchamia administrator.', 403);
   }
   const verifier = randomString(64); const challenge = base64UrlEncode(await sha256(verifier)); const state = randomString(24);
-  await env.SUBS_KV.put(`oauth:state:${state}`, JSON.stringify({ verifier, discord_id: linkDiscordId, owner: ownerFlow, created_at: Date.now() }), { expirationTtl: 600 });
+  await zapiszTokenJednorazowy(env, state, 'oauth-state', { verifier, discord_id: linkDiscordId, owner: ownerFlow, created_at: Date.now() });
   const params = new URLSearchParams({ response_type: 'code', client_id: env.KICK_CLIENT_ID, redirect_uri: env.REDIRECT_URI, scope: 'user:read channel:read events:subscribe', code_challenge: challenge, code_challenge_method: 'S256', state });
   return Response.redirect(`${KICK_AUTHORIZE_URL}?${params}`, 302);
 }
@@ -157,9 +172,8 @@ async function handleCallback(request, env) {
   const code = url.searchParams.get('code');
   const state = url.searchParams.get('state');
   if (!code || !state || state.length > 200) return text('Brak kodu OAuth lub nieprawidłowy parametr state.', 400);
-  const stateKey = `oauth:state:${state}`; const pending = await env.SUBS_KV.get(stateKey, 'json');
-  if (!pending || Date.now() - pending.created_at > 10 * 60 * 1000) return text('Link wygasł lub jest nieprawidłowy. Uruchom łączenie kont ponownie.', 400);
-  await env.SUBS_KV.delete(stateKey);
+  const pending = await zuzyjTokenJednorazowy(env, state, 'oauth-state');
+  if (!pending || Date.now() - pending.created_at > TOKEN_TTL_MS) return text('Link wygasł lub jest nieprawidłowy. Uruchom łączenie kont ponownie.', 400);
   const response = await fetch(KICK_TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'authorization_code', client_id: env.KICK_CLIENT_ID, client_secret: env.KICK_CLIENT_SECRET, redirect_uri: env.REDIRECT_URI, code, code_verifier: pending.verifier }) });
   let tokens;
   try { tokens = await parseJsonResponse(response, 'Wymiana kodu OAuth'); } catch (error) { console.error(error.message); return text('Nie udało się zakończyć autoryzacji Kick. Spróbuj ponownie.', 502); }
@@ -449,7 +463,7 @@ async function handleApi(request, env) {
   if (url.pathname === '/api/owner/start') {
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
     const ownerToken = randomString(32);
-    await env.SUBS_KV.put(`owner-start:${ownerToken}`, '1', { expirationTtl: 600 });
+    await zapiszTokenJednorazowy(env, ownerToken, 'owner-start', { created_at: Date.now() });
     return json({ url: `${url.origin}/authorize?${new URLSearchParams({ owner_token: ownerToken })}` });
   }
   if (url.pathname === '/api/link/start') {
@@ -458,7 +472,7 @@ async function handleApi(request, env) {
     const discordId = String(body.discord_id || '');
     if (!/^\d{17,20}$/.test(discordId)) return json({ error: 'invalid_discord_id' }, 400);
     const linkToken = randomString(32);
-    await env.SUBS_KV.put(`link-start:${linkToken}`, JSON.stringify({ discord_id: discordId, created_at: Date.now() }), { expirationTtl: 600 });
+    await zapiszTokenJednorazowy(env, linkToken, 'link-start', { discord_id: discordId, created_at: Date.now() });
     return json({ url: `${url.origin}/authorize?${new URLSearchParams({ link_token: linkToken })}` });
   }
   if (url.pathname === '/api/link') {
@@ -641,9 +655,9 @@ async function handleLjayLive(request, env) {
   const verifier = randomString(64);
   const challenge = base64UrlEncode(await sha256(verifier));
   const state = randomString(24);
-  await env.SUBS_KV.put(`oauth:state:${state}`, JSON.stringify({
+  await zapiszTokenJednorazowy(env, state, 'oauth-state', {
     verifier, discord_id: null, owner: true, expected_username: 'ljaylive', created_at: Date.now(),
-  }), { expirationTtl: 600 });
+  });
   const params = new URLSearchParams({
     response_type: 'code', client_id: env.KICK_CLIENT_ID, redirect_uri: env.REDIRECT_URI,
     scope: 'user:read channel:read events:subscribe', code_challenge: challenge,
