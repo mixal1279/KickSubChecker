@@ -227,24 +227,87 @@ async function handleRegisterEvents(request, env) {
   if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
   if (!bearerAuthorized(request, env)) return json({ error: 'unauthorized' }, 401);
   try {
+    const broadcasterId = await pobierzBroadcasterId(env);
+    const broadcasterNumber = Number(broadcasterId);
+    if (!Number.isSafeInteger(broadcasterNumber) || broadcasterNumber <= 0) {
+      return json({ error: 'invalid_broadcaster_id' }, 500);
+    }
     const accessToken = await getBroadcasterAccessToken(env);
-    const response = await fetch(KICK_EVENTS_URL, { method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ events: [{ name: 'channel.subscription.new', version: 1 }, { name: 'channel.subscription.renewal', version: 1 }, { name: 'channel.subscription.gifts', version: 1 }], method: 'webhook' }) });
+    const response = await fetch(KICK_EVENTS_URL, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        broadcaster_user_id: broadcasterNumber,
+        events: [
+          { name: 'channel.subscription.new', version: 1 },
+          { name: 'channel.subscription.renewal', version: 1 },
+          { name: 'channel.subscription.gifts', version: 1 },
+        ],
+        method: 'webhook',
+      }),
+    });
     const raw = await response.text();
-    return new Response(raw, { status: response.status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } });
-  } catch (error) { console.error('Rejestracja webhooków:', error.message); return json({ error: 'registration_failed', message: error.message }, 502); }
+    let data;
+    try { data = raw ? JSON.parse(raw) : {}; } catch {
+      return json({ error: 'invalid_kick_response' }, 502);
+    }
+    if (!response.ok) {
+      console.error('Kick odrzucił rejestrację webhooków:', response.status, raw.slice(0, 300));
+      return json({ error: 'kick_registration_failed', upstream_status: response.status }, 502);
+    }
+    const results = Array.isArray(data.data) ? data.data : [];
+    const expected = new Set([
+      'channel.subscription.new',
+      'channel.subscription.renewal',
+      'channel.subscription.gifts',
+    ]);
+    const accepted = new Set(results
+      .filter((item) => item && item.error == null)
+      .map((item) => item.event?.name || item.name)
+      .filter((name) => expected.has(name)));
+    const missing = [...expected].filter((name) => !accepted.has(name));
+    if (missing.length) {
+      console.error('Kick nie potwierdził wszystkich webhooków:', missing.join(', '));
+      return json({ error: 'incomplete_registration', missing, upstream: data }, 502);
+    }
+    return json({ success: true, broadcaster_user_id: broadcasterId, subscriptions: results });
+  } catch (error) {
+    console.error('Rejestracja webhooków:', error.message);
+    return json({ error: 'registration_failed' }, 502);
+  }
 }
 async function handleWebhook(request, env) {
   if (request.method !== 'POST') return text('Method Not Allowed', 405);
+  const declaredLength = Number(request.headers.get('Content-Length') || 0);
+  if (Number.isFinite(declaredLength) && declaredLength > 256_000) return text('Payload Too Large', 413);
   const rawBody = await request.text();
-  if (rawBody.length > 256_000) return text('Payload Too Large', 413);
+  if (new TextEncoder().encode(rawBody).byteLength > 256_000) return text('Payload Too Large', 413);
   const verification = await verifyWebhookSignature(env, request.headers, rawBody);
   if (!verification || verification.valid !== true) return text('Invalid signature or stale event', 401);
 
   let payload;
   try { payload = JSON.parse(rawBody); } catch { return text('Invalid JSON', 400); }
-  const eventType = request.headers.get('Kick-Event-Type') || 'unknown';
+  const eventType = request.headers.get('Kick-Event-Type') || '';
+  const eventVersion = request.headers.get('Kick-Event-Version') || '';
+  const obslugiwaneEventy = new Set([
+    'channel.subscription.new',
+    'channel.subscription.renewal',
+    'channel.subscription.gifts',
+  ]);
+  if (!obslugiwaneEventy.has(eventType) || eventVersion !== '1') {
+    return text('Unsupported event type or version', 400);
+  }
   const repo = repozytorium(env);
-  const broadcasterId = repo ? await pobierzBroadcasterId(env) : null;
+  const broadcasterId = await pobierzBroadcasterId(env);
+  const payloadBroadcasterId = String(payload?.broadcaster?.user_id ?? '');
+  if (!/^[0-9]{1,32}$/.test(payloadBroadcasterId) || payloadBroadcasterId !== broadcasterId) {
+    console.warn('Odrzucono webhook dla innego kanału:', {
+      eventId: verification.id,
+      expectedBroadcasterId: broadcasterId,
+      receivedBroadcasterId: payloadBroadcasterId || null,
+    });
+    return text('Broadcaster mismatch', 403);
+  }
   const seenKey = `webhook:seen:${verification.id}`;
 
   if (repo) {
@@ -256,7 +319,13 @@ async function handleWebhook(request, env) {
       const expiresAtMs = validExpiry ? Date.parse(payload.expires_at) : null;
       if (eventType === 'channel.subscription.new' || eventType === 'channel.subscription.renewal') {
         const subscriber = payload?.subscriber;
-        if (!subscriber || typeof subscriber.username !== 'string' || !USERNAME_RE.test(subscriber.username) || !validExpiry) {
+        if (
+          !subscriber
+          || typeof subscriber.username !== 'string'
+          || !USERNAME_RE.test(subscriber.username)
+          || !validExpiry
+          || (subscriber.user_id != null && !/^[0-9]{1,32}$/.test(String(subscriber.user_id)))
+        ) {
           throw new Error('Invalid subscription payload');
         }
         subscriptions.push({
@@ -269,12 +338,17 @@ async function handleWebhook(request, env) {
           throw new Error('Invalid gifted subscription payload');
         }
         for (const giftee of giftees) {
-          if (typeof giftee?.username !== 'string' || !USERNAME_RE.test(giftee.username)) continue;
+          if (
+            typeof giftee?.username !== 'string'
+            || !USERNAME_RE.test(giftee.username)
+            || (giftee.user_id != null && !/^[0-9]{1,32}$/.test(String(giftee.user_id)))
+          ) continue;
           subscriptions.push({
             kickUserId: giftee.user_id == null ? null : String(giftee.user_id),
             kickUsername: giftee.username, expiresAtMs, source: eventType,
           });
         }
+        if (!subscriptions.length) throw new Error('Gift webhook contains no valid recipients');
       }
       await repo.zakonczWebhook({ broadcasterId, eventId: verification.id, subscriptions });
       return text('OK');
@@ -292,17 +366,29 @@ async function handleWebhook(request, env) {
   const expiryIso = validExpiry ? new Date(payload.expires_at).toISOString() : null;
   if (eventType === 'channel.subscription.new' || eventType === 'channel.subscription.renewal') {
     const subscriber = payload?.subscriber;
-    if (typeof subscriber?.username !== 'string' || !USERNAME_RE.test(subscriber.username) || !validExpiry) {
+    if (
+      typeof subscriber?.username !== 'string'
+      || !USERNAME_RE.test(subscriber.username)
+      || !validExpiry
+      || (subscriber.user_id != null && !/^[0-9]{1,32}$/.test(String(subscriber.user_id)))
+    ) {
       return text('Invalid subscription payload', 400);
     }
     await saveSubscription(env, { username: subscriber.username, user_id: subscriber.user_id, expires_at: expiryIso, source: eventType });
   } else if (eventType === 'channel.subscription.gifts') {
     const giftees = payload?.giftees;
     if (!Array.isArray(giftees) || !giftees.length || !validExpiry) return text('Invalid gifted subscription payload', 400);
+    let zapisani = 0;
     for (const giftee of giftees) {
-      if (typeof giftee?.username !== 'string' || !USERNAME_RE.test(giftee.username)) continue;
+      if (
+        typeof giftee?.username !== 'string'
+        || !USERNAME_RE.test(giftee.username)
+        || (giftee.user_id != null && !/^[0-9]{1,32}$/.test(String(giftee.user_id)))
+      ) continue;
       await saveSubscription(env, { username: giftee.username, user_id: giftee.user_id, expires_at: expiryIso, source: eventType });
+      zapisani++;
     }
+    if (!zapisani) return text('Invalid gifted subscription recipients', 400);
   }
   await env.SUBS_KV.put(seenKey, '1', { expirationTtl: 86400 });
   return text('OK');
