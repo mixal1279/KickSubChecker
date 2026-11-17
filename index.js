@@ -1,6 +1,6 @@
 /** Kick Sub Checker — Cloudflare Worker. */
 import { utworzRepozytoriumD1 } from './d1-repository.js';
-import { walidujBroadcasteraWebhooka, walidujTypIWersjeWebhooka, walidujWynikRejestracjiWebhookow } from './webhook-validation.js';
+import { walidujBroadcasteraWebhooka, walidujIdSubskrypcjiWebhooka, walidujTypIWersjeWebhooka, walidujWynikRejestracjiWebhookow } from './webhook-validation.js';
 export { OAuthTokenStore } from './oauth-token-store.js';
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -311,6 +311,10 @@ async function handleRegisterEvents(request, env) {
         rejected_events: kontrola.niepoprawne,
       }, 502);
     }
+    const identyfikatory = Object.fromEntries(
+      data.data.map(({ name, subscription_id }) => [name, subscription_id]),
+    );
+    await env.SUBS_KV.put('kick:webhook:subscription_ids', JSON.stringify(identyfikatory));
     return json({
       success: true,
       broadcaster_user_id: broadcasterId,
@@ -336,6 +340,16 @@ async function handleWebhook(request, env) {
   const eventVersion = request.headers.get('Kick-Event-Version') || '';
   if (!walidujTypIWersjeWebhooka(eventType, eventVersion)) {
     return text('Unsupported event type or version', 400);
+  }
+  const subscriptionId = request.headers.get('Kick-Event-Subscription-Id') || '';
+  const zapisaneSubskrypcje = await env.SUBS_KV.get('kick:webhook:subscription_ids', 'json');
+  if (!walidujIdSubskrypcjiWebhooka(subscriptionId, eventType, zapisaneSubskrypcje)) {
+    console.warn('Odrzucono webhook z nieznanym ID subskrypcji:', {
+      eventId: verification.id,
+      eventType,
+      subscriptionId: subscriptionId || null,
+    });
+    return text('Unknown webhook subscription', 403);
   }
   const repo = repozytorium(env);
   const broadcasterId = await pobierzBroadcasterId(env);
