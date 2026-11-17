@@ -271,3 +271,53 @@ test('checkpoint odrzuca niepoprawny etap i kursor przed SQL', async () => {
   }), /kursor migracji/);
   assert.equal(db.wywolania.length, 0);
 });
+
+
+test('import powiązania z KV używa markera idempotencji i nie tworzy audytu przy ponowieniu', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  const nowy = await repo.importujPowiazanieMigracja({
+    broadcasterId: '12345', sourceKey: 'link:discord:23456789012345678',
+    discordUserId: '23456789012345678', kickUserId: '34567', kickUsername: 'Nick',
+  });
+  assert.equal(nowy, true);
+  const batch = db.wywolania[0];
+  assert.equal(batch.typ, 'batch');
+  assert.equal(batch.polecenia.length, 2);
+  assert.match(batch.polecenia[0].sql, /INSERT OR IGNORE INTO migration_items/);
+  assert.match(batch.polecenia[1].sql, /INSERT INTO account_links/);
+  assert.match(batch.polecenia[1].sql, /ON CONFLICT DO NOTHING/);
+  assert.doesNotMatch(batch.polecenia.map(x => x.sql).join(' '), /audit_log/);
+});
+
+test('import subskrypcji z KV zapisuje marker i rekord w jednej paczce', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  const nowa = await repo.importujSubskrypcjeMigracja({
+    broadcasterId: '12345', sourceKey: 'sub:testuser',
+    kickUserId: '34567', kickUsername: 'TestUser',
+    expiresAtMs: Date.now() + 60_000, source: 'admin',
+  });
+  assert.equal(nowa, true);
+  const batch = db.wywolania[0];
+  assert.equal(batch.typ, 'batch');
+  assert.equal(batch.polecenia.length, 2);
+  assert.match(batch.polecenia[0].sql, /INSERT OR IGNORE INTO migration_items/);
+  assert.match(batch.polecenia[1].sql, /INSERT INTO subscriptions/);
+  assert.match(batch.polecenia[1].sql, /ON CONFLICT\(broadcaster_id, subscriber_key\) DO UPDATE/);
+});
+
+test('import migracyjny odrzuca klucz spoza właściwego prefiksu przed SQL', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await assert.rejects(repo.importujPowiazanieMigracja({
+    broadcasterId: '12345', sourceKey: 'sub:wrong',
+    discordUserId: '23456789012345678', kickUserId: '34567', kickUsername: 'Nick',
+  }), /klucz źródłowy/);
+  await assert.rejects(repo.importujSubskrypcjeMigracja({
+    broadcasterId: '12345', sourceKey: 'link:wrong',
+    kickUserId: '34567', kickUsername: 'Nick',
+    expiresAtMs: Date.now() + 60_000, source: 'admin',
+  }), /klucz źródłowy/);
+  assert.equal(db.wywolania.length, 0);
+});
