@@ -35,7 +35,7 @@ Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanych migracji — zmia
 
 ## Budżet zapytań D1 dla migratora
 
-Import przetwarza maksymalnie 20 rekordów KV na jedno żądanie. Każdy rekord wymaga obecnie jednego atomowego `D1 batch` oraz odczytu markera. Razem z przejęciem lease, odczytem stanu, checkpointem i finalizacją daje to maksymalnie około 46 wywołań D1 na końcowej stronie. Limit 20 utrzymuje migrator poniżej limitu 50 zapytań D1 na pojedyncze wywołanie Workera w planie Free. Dry-run może odczytywać KV stronami po 50, ponieważ nie wykonuje importu do D1.
+Import przetwarza maksymalnie 16 rekordów KV na jedno żądanie. Każdy rekord wymaga jednego odczytu KV i jednego atomowego `D1 batch`, który zawiera również odczyt markera. Końcowa strona zużywa około 22 wywołań D1 i 42 subrequests; przy odświeżaniu wygasłego OAuth budżet rośnie do około 46 subrequests. Pozostaje margines do limitu 50 subrequests na Worker invocation w planie Free. Dry-run może odczytywać KV stronami po 50, ponieważ nie importuje rekordów do D1.
 
 ## Testy integracyjne D1
 
