@@ -389,11 +389,16 @@ export function utworzRepozytoriumD1(db) {
       const wyniki = await db.batch([
         db.prepare(`
           INSERT INTO channels (broadcaster_id, broadcaster_username, created_at_ms, updated_at_ms)
-          VALUES (?, ?, ?, ?)
+          SELECT ?, ?, ?, ?
+          WHERE NOT EXISTS (
+            SELECT 1 FROM migration_runs
+            WHERE broadcaster_id = ? AND status = 'running'
+              AND lease_expires_at_ms > ? AND lease_token != ?
+          )
           ON CONFLICT(broadcaster_id) DO UPDATE SET
             broadcaster_username = excluded.broadcaster_username,
             updated_at_ms = excluded.updated_at_ms
-        `).bind(kanal, nick, teraz, teraz),
+        `).bind(kanal, nick, teraz, teraz, kanal, teraz, leaseToken),
         db.prepare(`
           INSERT INTO migration_runs
             (broadcaster_id, status, phase, counts_json, lease_token, lease_expires_at_ms, started_at_ms, updated_at_ms)
