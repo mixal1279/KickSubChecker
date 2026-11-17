@@ -376,6 +376,43 @@ export function utworzRepozytoriumD1(db) {
       };
     },
 
+    async zapewnijKanalIPrzejmijMigracje({ broadcasterId, username, leaseToken, teraz = Date.now(), leaseMs = 60_000 }) {
+      const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
+      const nick = normalizujNick(username);
+      if (typeof leaseToken !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(leaseToken)) {
+        throw new TypeError('Nieprawidłowy token blokady migracji.');
+      }
+      if (!Number.isSafeInteger(teraz) || teraz <= 0 || !Number.isSafeInteger(leaseMs) || leaseMs < 10_000 || leaseMs > 300_000) {
+        throw new TypeError('Nieprawidłowy czas blokady migracji.');
+      }
+      // Utworzenie kanału i przejęcie lease są jedną transakcją D1.
+      const wyniki = await db.batch([
+        db.prepare(`
+          INSERT INTO channels (broadcaster_id, broadcaster_username, created_at_ms, updated_at_ms)
+          VALUES (?, ?, ?, ?)
+          ON CONFLICT(broadcaster_id) DO UPDATE SET
+            broadcaster_username = excluded.broadcaster_username,
+            updated_at_ms = excluded.updated_at_ms
+        `).bind(kanal, nick, teraz, teraz),
+        db.prepare(`
+          INSERT INTO migration_runs
+            (broadcaster_id, status, phase, counts_json, lease_token, lease_expires_at_ms, started_at_ms, updated_at_ms)
+          VALUES (?, 'running', 'links', '{}', ?, ?, ?, ?)
+          ON CONFLICT(broadcaster_id) DO UPDATE SET
+            status = CASE WHEN migration_runs.status = 'completed' THEN 'completed' ELSE 'running' END,
+            lease_token = excluded.lease_token,
+            lease_expires_at_ms = excluded.lease_expires_at_ms,
+            updated_at_ms = excluded.updated_at_ms
+          WHERE migration_runs.status != 'completed'
+            AND (migration_runs.lease_expires_at_ms IS NULL
+              OR migration_runs.lease_expires_at_ms <= ?
+              OR migration_runs.lease_token = ?)
+        `).bind(kanal, leaseToken, teraz + leaseMs, teraz, teraz, teraz, leaseToken),
+      ]);
+      wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Przygotowanie migracji (operacja ${i + 1})`));
+      return Number(wyniki[1]?.meta?.changes || 0) === 1;
+    },
+
     async przejmijMigracje({ broadcasterId, leaseToken, teraz = Date.now(), leaseMs = 60_000 }) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
       if (typeof leaseToken !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(leaseToken)) {
