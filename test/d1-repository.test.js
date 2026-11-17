@@ -30,7 +30,11 @@ function utworzFakeD1({ zmiany = 1, pierwszy = null, wiersze = [] } = {}) {
     },
     async batch(polecenia) {
       wywolania.push({ typ: 'batch', polecenia });
-      return polecenia.map(() => ({ success: true, meta: { changes: 1 } }));
+      return polecenia.map((_, i) => ({
+        success: true,
+        meta: { changes: 1 },
+        results: i === 2 && pierwszy ? [pierwszy] : [],
+      }));
     },
   };
   return db;
@@ -283,11 +287,13 @@ test('import powiązania z KV używa markera idempotencji i nie tworzy audytu pr
   assert.equal(nowy, true);
   const batch = db.wywolania[0];
   assert.equal(batch.typ, 'batch');
-  assert.equal(batch.polecenia.length, 2);
+  assert.equal(batch.polecenia.length, 3);
   assert.match(batch.polecenia[0].sql, /INSERT INTO account_links/);
   assert.match(batch.polecenia[0].sql, /ON CONFLICT DO NOTHING/);
   assert.match(batch.polecenia[1].sql, /INSERT OR IGNORE INTO migration_items/);
   assert.match(batch.polecenia[1].sql, /WHERE EXISTS/);
+  assert.match(batch.polecenia[2].sql, /SELECT 1 AS imported FROM migration_items/);
+  assert.equal(db.wywolania.length, 1, 'Odczyt markera musi być częścią tego samego batcha.');
   assert.doesNotMatch(batch.polecenia.map(x => x.sql).join(' '), /audit_log/);
 });
 
@@ -302,10 +308,12 @@ test('import subskrypcji z KV zapisuje marker i rekord w jednej paczce', async (
   assert.equal(nowa, true);
   const batch = db.wywolania[0];
   assert.equal(batch.typ, 'batch');
-  assert.equal(batch.polecenia.length, 2);
+  assert.equal(batch.polecenia.length, 3);
   assert.match(batch.polecenia[0].sql, /INSERT OR IGNORE INTO migration_items/);
   assert.match(batch.polecenia[1].sql, /INSERT INTO subscriptions/);
   assert.match(batch.polecenia[1].sql, /ON CONFLICT\(broadcaster_id, subscriber_key\) DO UPDATE/);
+  assert.match(batch.polecenia[2].sql, /SELECT 1 AS imported FROM migration_items/);
+  assert.equal(db.wywolania.length, 1, 'Odczyt markera musi być częścią tego samego batcha.');
 });
 
 test('import migracyjny odrzuca klucz spoza właściwego prefiksu przed SQL', async () => {
