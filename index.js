@@ -82,7 +82,7 @@ async function adminBearerAuthorized(request, env) {
 async function parseJsonResponse(response, label) {
   const raw = await response.text();
   let data; try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`${label}: odpowiedź API nie jest poprawnym JSON-em.`); }
-  if (!response.ok) throw new Error(`${label}: HTTP ${response.status} ${String(data.message || data.error || raw).slice(0, 300)}`);
+  if (!response.ok) throw new Error(`${label}: HTTP ${response.status}`);
   return data;
 }
 async function fetchKickPublicKey(env) {
