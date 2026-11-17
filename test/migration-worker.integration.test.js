@@ -52,13 +52,22 @@ function utworzEnv({
         zapisyKv.push({ operacja: 'delete', key });
         dane.delete(key);
       },
-      async list({ prefix }) {
-        return { keys: [...dane.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true };
+      async list({ prefix, cursor, limit = 1000 }) {
+        const keys = [...dane.keys()].filter((key) => key.startsWith(prefix)).sort();
+        const offset = cursor == null ? 0 : Number(cursor);
+        const selected = keys.slice(offset, offset + limit);
+        const nextOffset = offset + selected.length;
+        const listComplete = nextOffset >= keys.length;
+        return {
+          keys: selected.map((name) => ({ name })),
+          list_complete: listComplete,
+          ...(listComplete ? {} : { cursor: String(nextOffset) }),
+        };
       },
     },
   };
 
-  return { env, zapisyKv, wywolaniaD1 };
+  return { env, dane, zapisyKv, wywolaniaD1 };
 }
 
 function utworzRequest() {
@@ -198,4 +207,67 @@ test('endpoint migracji bezpiecznie kończy się przy awarii odczytu KV', async 
   assert.equal(response.status, 500);
   assert.deepEqual(zapisyKv, []);
   assert.deepEqual(wywolaniaD1, []);
+});
+
+
+test('dry-run paginuje KV bez przekraczania budżetu subrequests i bez zapisów', async () => {
+  const { env, dane, zapisyKv, wywolaniaD1 } = utworzEnv();
+  for (const key of [...dane.keys()]) {
+    if (key.startsWith('link:discord:') || key.startsWith('sub:')) dane.delete(key);
+  }
+  for (let i = 0; i < 13; i++) {
+    const discordId = String(23456789012345670n + BigInt(i));
+    const kickId = String(3456700n + BigInt(i));
+    const username = `testuser${i}`;
+    dane.set(`link:discord:${discordId}`, {
+      discord_id: discordId, kick_user_id: kickId, username,
+    });
+    dane.set(`sub:subuser${i}`, {
+      username: `subuser${i}`, user_id: kickId,
+      expires_at: new Date(Date.now() + 60_000).toISOString(), source: 'admin',
+    });
+  }
+
+  const poprzedniFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.equal(String(url), 'https://api.kick.com/public/v1/users');
+    return new Response(JSON.stringify({
+      data: [{ user_id: broadcasterId, username: 'testchannel' }],
+    }), { status: 200 });
+  };
+
+  try {
+    const pierwsza = await worker.fetch(utworzRequest(), env);
+    assert.equal(pierwsza.status, 200);
+    const raportPierwszy = await pierwsza.json();
+    assert.equal(raportPierwszy.links_seen, 12);
+    assert.equal(raportPierwszy.subscriptions_seen, 12);
+    assert.equal(raportPierwszy.links_complete, false);
+    assert.equal(raportPierwszy.subscriptions_complete, false);
+    assert.equal(raportPierwszy.has_more, true);
+    assert.equal(raportPierwszy.duplicate_check_scope, 'current_page');
+    assert.equal(typeof raportPierwszy.links_cursor, 'string');
+    assert.equal(typeof raportPierwszy.subscriptions_cursor, 'string');
+
+    const url = new URL('https://worker.test/api/admin/migrate-kv');
+    url.searchParams.set('dry_run', 'true');
+    url.searchParams.set('links_cursor', raportPierwszy.links_cursor);
+    url.searchParams.set('subscriptions_cursor', raportPierwszy.subscriptions_cursor);
+    const druga = await worker.fetch(new Request(url, {
+      method: 'POST', headers: { Authorization: `Bearer ${sekret}` },
+    }), env);
+    assert.equal(druga.status, 200);
+    const raportDrugi = await druga.json();
+    assert.equal(raportDrugi.links_seen, 1);
+    assert.equal(raportDrugi.subscriptions_seen, 1);
+    assert.equal(raportDrugi.links_complete, true);
+    assert.equal(raportDrugi.subscriptions_complete, true);
+    assert.equal(raportDrugi.has_more, false);
+    assert.equal(raportDrugi.links_cursor, null);
+    assert.equal(raportDrugi.subscriptions_cursor, null);
+    assert.deepEqual(zapisyKv, []);
+    assert.deepEqual(wywolaniaD1, []);
+  } finally {
+    globalThis.fetch = poprzedniFetch;
+  }
 });
