@@ -61,7 +61,7 @@ test('wykrywa niepełną rejestrację, błędy API i brak subscription_id', () =
 test('odrzuca duplikaty, nieznane eventy, błędną wersję i wadliwe ID', () => {
   const wyniki = pelneWyniki();
   wyniki[1] = { ...wyniki[0] };
-  wyniki[2] = { name: 'unknown.event', version: 1, subscription_id: '01JABCDEF0123456789ABCDE0' };
+  wyniki[2] = { name: 'unknown.event', version: 1, subscription_id: '01JABCDEF0123456789ABCDE01' };
   const wynik = walidujWynikRejestracjiWebhookow({ data: wyniki });
   assert.equal(wynik.ok, false);
   assert.ok(wynik.niepoprawne.length >= 2);
@@ -85,8 +85,8 @@ test('wiąże event z ID subskrypcji zarejestrowanym dla tego typu', () => {
     assert.equal(walidujIdSubskrypcjiWebhooka(identyfikatory[typ], 'channel.subscription.new', identyfikatory),
       typ === 'channel.subscription.new');
   }
-  assert.equal(walidujIdSubskrypcjiWebhooka('01JABCDEF0123456789ABCDE0', 'unknown', identyfikatory), false);
+  assert.equal(walidujIdSubskrypcjiWebhooka('01JABCDEF0123456789ABCDE01', 'unknown', identyfikatory), false);
   assert.equal(walidujIdSubskrypcjiWebhooka('', OBSLUGIWANE_EVENTY_KICK[0], identyfikatory), false);
   assert.equal(walidujIdSubskrypcjiWebhooka('not-a-ulid', OBSLUGIWANE_EVENTY_KICK[0], identyfikatory), false);
-  assert.equal(walidujIdSubskrypcjiWebhooka('01JABCDEF0123456789ABCDE0', OBSLUGIWANE_EVENTY_KICK[0], null), false);
+  assert.equal(walidujIdSubskrypcjiWebhooka('01JABCDEF0123456789ABCDE01', OBSLUGIWANE_EVENTY_KICK[0], null), false);
 });
