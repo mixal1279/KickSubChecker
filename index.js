@@ -256,21 +256,16 @@ async function handleRegisterEvents(request, env) {
       return json({ error: 'kick_registration_failed', upstream_status: response.status }, 502);
     }
     const results = Array.isArray(data.data) ? data.data : [];
-    const expected = new Set([
-      'channel.subscription.new',
-      'channel.subscription.renewal',
-      'channel.subscription.gifts',
-    ]);
-    const accepted = new Set(results
-      .filter((item) => item && item.error == null)
-      .map((item) => item.event?.name || item.name)
-      .filter((name) => expected.has(name)));
-    const missing = [...expected].filter((name) => !accepted.has(name));
-    if (missing.length) {
-      console.error('Kick nie potwierdził wszystkich webhooków:', missing.join(', '));
-      return json({ error: 'incomplete_registration', missing, upstream: data }, 502);
+    const rejected = results.filter((item) => item && item.error);
+    if (rejected.length) {
+      console.error('Kick odrzucił część subskrypcji webhooków:', JSON.stringify(rejected).slice(0, 500));
+      return json({ error: 'partial_registration_failure', rejected }, 502);
     }
-    return json({ success: true, broadcaster_user_id: broadcasterId, subscriptions: results });
+    return json({
+      success: true,
+      broadcaster_user_id: broadcasterId,
+      response: data,
+    });
   } catch (error) {
     console.error('Rejestracja webhooków:', error.message);
     return json({ error: 'registration_failed' }, 502);
