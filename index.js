@@ -50,17 +50,34 @@ async function hmac(value, secret) {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return base64UrlEncode(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value)));
 }
-function constantTimeEqual(a, b) {
-  if (typeof a !== 'string' || typeof b !== 'string' || a.length !== b.length) return false;
-  let result = 0; for (let i = 0; i < a.length; i++) result |= a.charCodeAt(i) ^ b.charCodeAt(i); return result === 0;
+async function constantTimeEqual(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const encoder = new TextEncoder();
+  const [hashA, hashB] = await Promise.all([
+    crypto.subtle.digest('SHA-256', encoder.encode(a)),
+    crypto.subtle.digest('SHA-256', encoder.encode(b)),
+  ]);
+  // Workers ma natywne timingSafeEqual; fallback Node zachowuje stałą długość porównania.
+  if (typeof crypto.subtle.timingSafeEqual === 'function') {
+    return crypto.subtle.timingSafeEqual(hashA, hashB);
+  }
+  const bytesA = new Uint8Array(hashA);
+  const bytesB = new Uint8Array(hashB);
+  let roznica = 0;
+  for (let i = 0; i < bytesA.length; i++) roznica |= bytesA[i] ^ bytesB[i];
+  return roznica === 0;
 }
-function bearerAuthorized(request, env) {
+async function bearerAuthorized(request, env) {
+  const sekret = env.BOT_API_SECRET;
+  if (typeof sekret !== 'string' || !sekret) return false;
   const value = request.headers.get('Authorization') || '';
-  return Boolean(env.BOT_API_SECRET && constantTimeEqual(value, `Bearer ${env.BOT_API_SECRET}`));
+  return constantTimeEqual(value, `Bearer ${sekret}`);
 }
-function adminBearerAuthorized(request, env) {
+async function adminBearerAuthorized(request, env) {
+  const sekret = env.ADMIN_API_SECRET;
+  if (typeof sekret !== 'string' || !sekret) return false;
   const value = request.headers.get('Authorization') || '';
-  return Boolean(env.ADMIN_API_SECRET && constantTimeEqual(value, `Bearer ${env.ADMIN_API_SECRET}`));
+  return constantTimeEqual(value, `Bearer ${sekret}`);
 }
 async function parseJsonResponse(response, label) {
   const raw = await response.text();
@@ -277,7 +294,7 @@ async function handleCallback(request, env) {
 }
 async function handleRegisterEvents(request, env) {
   if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
-  if (!bearerAuthorized(request, env)) return json({ error: 'unauthorized' }, 401);
+  if (!await bearerAuthorized(request, env)) return json({ error: 'unauthorized' }, 401);
   try {
     const broadcasterId = await pobierzBroadcasterId(env);
     const broadcasterNumber = Number(broadcasterId);
@@ -478,8 +495,8 @@ async function handleApi(request, env) {
   const url = new URL(request.url);
   const administracyjny = url.pathname === '/api/admin/migrate-kv';
   const autoryzowany = administracyjny
-    ? adminBearerAuthorized(request, env)
-    : bearerAuthorized(request, env);
+    ? await adminBearerAuthorized(request, env)
+    : await bearerAuthorized(request, env);
   if (!autoryzowany) return json({ error: 'unauthorized' }, 401);
   if (url.pathname === '/api/check') {
     const username = (url.searchParams.get('username') || '').replace(/^@/, '').trim();
