@@ -159,6 +159,10 @@ function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false
           const value = wpisy.get(key) ?? null;
           return type === 'json' ? value : value;
         }
+        if (key.startsWith('sub:')) {
+          const value = wpisy.get(key) ?? null;
+          return type === 'json' ? value : value;
+        }
         return null;
       },
       async list({ prefix }) {
