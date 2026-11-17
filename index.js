@@ -19,7 +19,7 @@ async function zuzyjTokenJednorazowy(env, token, typ) {
   return magazynTokenow(env, token).zuzyj(token, typ, Date.now());
 }
 async function zarezerwujTokenOAuth(env, token) {
-  return magazynTokenow(env, token).zarezerwuj(token, 'oauth-state', Date.now(), 60_000);
+  return magazynTokenow(env, token).zarezerwuj(token, 'oauth-state', Date.now(), 120_000);
 }
 async function zakonczTokenOAuth(env, token, rezerwacjaId) {
   return magazynTokenow(env, token).zakoncz(token, 'oauth-state', rezerwacjaId);
