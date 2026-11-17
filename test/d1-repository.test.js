@@ -214,3 +214,60 @@ test('starszy event nie nadpisuje metadanych nowszej subskrypcji', async () => {
   assert.match(sql, /ELSE subscriptions\.source/);
   assert.match(sql, /ELSE subscriptions\.kick_username/);
 });
+
+
+test('blokada migracji jest przypisana do kanału i ma wygasający lease', async () => {
+  const db = utworzFakeD1({ zmiany: 1 });
+  const repo = utworzRepozytoriumD1(db);
+  const token = 'abcdefghijklmnopqrstuvwx123456';
+  assert.equal(await repo.przejmijMigracje({
+    broadcasterId: '12345', leaseToken: token, teraz: 1_000_000, leaseMs: 60_000,
+  }), true);
+  const sql = db.wywolania[0].sql;
+  assert.match(sql, /ON CONFLICT\(broadcaster_id\) DO UPDATE/);
+  assert.match(sql, /lease_expires_at_ms <= \?/);
+  assert.match(sql, /status != 'completed'/);
+  assert.deepEqual(db.wywolania[0].args, [
+    '12345', token, 1_060_000, 1_000_000, 1_000_000, 1_000_000, token,
+  ]);
+});
+
+test('checkpoint wymaga aktualnego tokena lease i zapisuje kursor oraz liczniki', async () => {
+  const db = utworzFakeD1({ zmiany: 1 });
+  const repo = utworzRepozytoriumD1(db);
+  const token = 'abcdefghijklmnopqrstuvwx123456';
+  assert.equal(await repo.zapiszPostepMigracji({
+    broadcasterId: '12345', leaseToken: token, phase: 'subscriptions',
+    cursor: 'kv-cursor-1', counts: { links_imported: 12 }, teraz: 2_000_000,
+  }), true);
+  assert.match(db.wywolania[0].sql, /lease_token = \?/);
+  assert.match(db.wywolania[0].sql, /lease_expires_at_ms > \?/);
+  assert.deepEqual(db.wywolania[0].args, [
+    'subscriptions', 'kv-cursor-1', '{"links_imported":12}',
+    2_060_000, 2_000_000, '12345', token, 2_000_000,
+  ]);
+});
+
+test('migracja nie może zostać zakończona bez ważnego lease', async () => {
+  const db = utworzFakeD1({ zmiany: 0 });
+  const repo = utworzRepozytoriumD1(db);
+  assert.equal(await repo.zakonczMigracje({
+    broadcasterId: '12345', leaseToken: 'abcdefghijklmnopqrstuvwx123456', teraz: 3_000_000,
+  }), false);
+  assert.match(db.wywolania[0].sql, /status = 'running'/);
+  assert.match(db.wywolania[0].sql, /lease_expires_at_ms > \?/);
+});
+
+test('checkpoint odrzuca niepoprawny etap i kursor przed SQL', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await assert.rejects(repo.zapiszPostepMigracji({
+    broadcasterId: '12345', leaseToken: 'abcdefghijklmnopqrstuvwx123456',
+    phase: 'unknown', counts: {},
+  }), /etap migracji/);
+  await assert.rejects(repo.zapiszPostepMigracji({
+    broadcasterId: '12345', leaseToken: 'abcdefghijklmnopqrstuvwx123456',
+    phase: 'links', cursor: 'x'.repeat(2049), counts: {},
+  }), /kursor migracji/);
+  assert.equal(db.wywolania.length, 0);
+});
