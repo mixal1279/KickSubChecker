@@ -1,5 +1,6 @@
 /** Kick Sub Checker — Cloudflare Worker. */
 import { utworzRepozytoriumD1 } from './d1-repository.js';
+import { walidujBroadcasteraWebhooka, walidujTypIWersjeWebhooka, walidujWynikRejestracjiWebhookow } from './webhook-validation.js';
 export { OAuthTokenStore } from './oauth-token-store.js';
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
@@ -301,16 +302,19 @@ async function handleRegisterEvents(request, env) {
       console.error('Kick odrzucił rejestrację webhooków:', response.status, raw.slice(0, 300));
       return json({ error: 'kick_registration_failed', upstream_status: response.status }, 502);
     }
-    const results = Array.isArray(data.data) ? data.data : [];
-    const rejected = results.filter((item) => item && item.error);
-    if (rejected.length) {
-      console.error('Kick odrzucił część subskrypcji webhooków:', JSON.stringify(rejected).slice(0, 500));
-      return json({ error: 'partial_registration_failure', rejected }, 502);
+    const kontrola = walidujWynikRejestracjiWebhookow(data);
+    if (!kontrola.ok) {
+      console.error('Kick nie potwierdził wszystkich webhooków:', JSON.stringify(kontrola).slice(0, 500));
+      return json({
+        error: 'incomplete_registration',
+        missing_events: kontrola.brakujace,
+        rejected_events: kontrola.niepoprawne,
+      }, 502);
     }
     return json({
       success: true,
       broadcaster_user_id: broadcasterId,
-      response: data,
+      registered_events: data.data.map(({ name, version, subscription_id }) => ({ name, version, subscription_id })),
     });
   } catch (error) {
     console.error('Rejestracja webhooków:', error.message);
@@ -330,18 +334,13 @@ async function handleWebhook(request, env) {
   try { payload = JSON.parse(rawBody); } catch { return text('Invalid JSON', 400); }
   const eventType = request.headers.get('Kick-Event-Type') || '';
   const eventVersion = request.headers.get('Kick-Event-Version') || '';
-  const obslugiwaneEventy = new Set([
-    'channel.subscription.new',
-    'channel.subscription.renewal',
-    'channel.subscription.gifts',
-  ]);
-  if (!obslugiwaneEventy.has(eventType) || eventVersion !== '1') {
+  if (!walidujTypIWersjeWebhooka(eventType, eventVersion)) {
     return text('Unsupported event type or version', 400);
   }
   const repo = repozytorium(env);
   const broadcasterId = await pobierzBroadcasterId(env);
   const payloadBroadcasterId = String(payload?.broadcaster?.user_id ?? '');
-  if (!/^[0-9]{1,32}$/.test(payloadBroadcasterId) || payloadBroadcasterId !== broadcasterId) {
+  if (!walidujBroadcasteraWebhooka(payload, broadcasterId)) {
     console.warn('Odrzucono webhook dla innego kanału:', {
       eventId: verification.id,
       expectedBroadcasterId: broadcasterId,
