@@ -7,13 +7,14 @@ const kanal = '123456789';
 const token = 'test-access-token';
 const teraz = Date.now();
 
-function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0 } = {}) {
+function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0 } = {}) {
   const rekordy = new Map();
   const subskrypcjeD1 = new Map();
   const markery = new Set();
   if (fazaPoczatkowa === 'subscriptions') markery.add('links|link:discord:10000000000000000');
   let stan = null;
   let bladCheckpointRaz = bladCheckpoint;
+  let bladFinalizacjiRaz = bladFinalizacji;
   let zwolnijOdczyt;
   let sygnalOdczytu;
   const odczytRozpoczety = new Promise((resolve) => { sygnalOdczytu = resolve; });
@@ -60,6 +61,10 @@ function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false
                 return { success: true, meta: { changes: 1 } };
               }
               if (sql.includes('UPDATE migration_runs SET status = \'completed\'')) {
+                if (bladFinalizacjiRaz) {
+                  bladFinalizacjiRaz = false;
+                  throw new Error('symulowana awaria finalizacji');
+                }
                 const [completed, updated, broadcasterId, leaseToken, current] = args;
                 if (!stan || stan.broadcaster_id !== broadcasterId || stan.lease_token !== leaseToken || stan.lease_expires_at_ms <= current) return { success: true, meta: { changes: 0 } };
                 Object.assign(stan, { status: 'completed', phase: 'completed', cursor: null, lease_token: null, lease_expires_at_ms: null, completed_at_ms: completed, updated_at_ms: updated });
@@ -268,5 +273,32 @@ test('zablokowane żądanie nie wykonuje upsertu kanału', async () => {
     assert.equal(srodowisko.wywolania.filter((x) => x.typ === 'channel_upsert').length, liczbaUpsertowPrzed);
     srodowisko.odblokujOdczyt();
     await pierwszyPromise;
+  });
+});
+
+
+test('wznowienie po awarii finalizacji nie przetwarza ponownie stron KV', async () => {
+  const srodowisko = utworzSrodowisko({
+    bladFinalizacji: true, fazaPoczatkowa: 'subscriptions', subskrypcje: 3,
+  });
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.stan().status, 'running');
+    assert.equal(srodowisko.stan().phase, 'completed');
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    const licznikiPoPierwszej = JSON.parse(srodowisko.stan().counts_json);
+
+    const wznowiona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(wznowiona.status, 200);
+    const raport = await wznowiona.json();
+    assert.equal(raport.complete, true);
+    assert.equal(raport.processed_this_request, 0);
+    assert.equal(raport.subscriptions_seen, 3);
+    assert.equal(raport.subscriptions_valid, 3);
+    assert.equal(raport.subscriptions_imported, 3);
+    assert.deepEqual(JSON.parse(srodowisko.stan().counts_json), licznikiPoPierwszej);
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal(srodowisko.stan().status, 'completed');
   });
 });
