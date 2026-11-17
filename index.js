@@ -579,16 +579,27 @@ async function handleApi(request, env) {
         } catch {
           throw new Error('Nieprawidłowe liczniki zapisane w stanie migracji.');
         }
+        const polaLicznikow = [
+          'links_seen', 'links_valid', 'links_imported', 'links_skipped', 'links_conflicts',
+          'subscriptions_seen', 'subscriptions_valid', 'subscriptions_imported', 'subscriptions_skipped',
+        ];
+        for (const pole of polaLicznikow) {
+          const wartosc = counts[pole] ?? 0;
+          if (!Number.isSafeInteger(wartosc) || wartosc < 0) {
+            throw new Error(`Nieprawidłowy licznik migracji: ${pole}.`);
+          }
+        }
         const raport = {
           dry_run: false, broadcaster_id: owner.user_id,
-          links_seen: Number(counts.links_seen || 0),
-          links_valid: Number(counts.links_valid || 0),
-          links_imported: Number(counts.links_imported || 0),
-          links_skipped: Number(counts.links_skipped || 0),
-          subscriptions_seen: Number(counts.subscriptions_seen || 0),
-          subscriptions_valid: Number(counts.subscriptions_valid || 0),
-          subscriptions_imported: Number(counts.subscriptions_imported || 0),
-          subscriptions_skipped: Number(counts.subscriptions_skipped || 0),
+          links_seen: counts.links_seen ?? 0,
+          links_valid: counts.links_valid ?? 0,
+          links_imported: counts.links_imported ?? 0,
+          links_skipped: counts.links_skipped ?? 0,
+          links_conflicts: counts.links_conflicts ?? 0,
+          subscriptions_seen: counts.subscriptions_seen ?? 0,
+          subscriptions_valid: counts.subscriptions_valid ?? 0,
+          subscriptions_imported: counts.subscriptions_imported ?? 0,
+          subscriptions_skipped: counts.subscriptions_skipped ?? 0,
           errors: [],
         };
         const dodajBlad = (typ, key, reason) => {
@@ -625,10 +636,17 @@ async function handleApi(request, env) {
                 broadcasterId: owner.user_id, sourceKey: key.name,
                 discordUserId: discordId, kickUserId: kickId, kickUsername: username,
               });
-              if (nowy) raport.links_imported++;
+              if (nowy) {
+                raport.links_imported++;
+              } else {
+                raport.links_skipped++;
+                raport.links_conflicts++;
+                dodajBlad('link', key.name, 'unique_conflict');
+              }
             } catch (error) {
               if (/UNIQUE|constraint/i.test(String(error.message))) {
                 raport.links_skipped++;
+                raport.links_conflicts++;
                 dodajBlad('link', key.name, 'unique_conflict');
               } else {
                 throw error;
@@ -677,11 +695,13 @@ async function handleApi(request, env) {
         const zakonczone = phase === 'subscriptions' && page.list_complete;
         if (zakonczone) {
           const trwaleZaimportowane = await repo.policzElementyMigracji({ broadcasterId: owner.user_id });
+          const oczekiwaneLinki = raport.links_valid - raport.links_conflicts;
           if (
-            trwaleZaimportowane.links > raport.links_valid
-            || trwaleZaimportowane.subscriptions > raport.subscriptions_valid
+            oczekiwaneLinki < 0
+            || trwaleZaimportowane.links !== oczekiwaneLinki
+            || trwaleZaimportowane.subscriptions !== raport.subscriptions_valid
           ) {
-            throw new Error('Niespójne liczniki elementów migracji względem przetworzonych rekordów KV.');
+            throw new Error('Niezgodność liczby zaimportowanych rekordów KV i trwałych markerów D1.');
           }
           raport.links_imported = trwaleZaimportowane.links;
           raport.subscriptions_imported = trwaleZaimportowane.subscriptions;
@@ -693,6 +713,7 @@ async function handleApi(request, env) {
           counts: {
             links_seen: raport.links_seen, links_valid: raport.links_valid,
             links_imported: raport.links_imported, links_skipped: raport.links_skipped,
+            links_conflicts: raport.links_conflicts,
             subscriptions_seen: raport.subscriptions_seen,
             subscriptions_valid: raport.subscriptions_valid,
             subscriptions_imported: raport.subscriptions_imported,
