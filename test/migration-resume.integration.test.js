@@ -139,7 +139,11 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
           throw new Error('Nieobsługiwane SQL batch: ' + polecenie.sql);
         }
       }
-      return polecenia.map(() => ({ success: true, meta: { changes: 1 } }));
+      return polecenia.map((_, i) => ({
+        success: true,
+        meta: { changes: 1 },
+        results: i === 2 ? [{ imported: 1 }] : [],
+      }));
     },
   };
 
