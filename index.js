@@ -556,6 +556,159 @@ async function handleApi(request, env) {
       await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
     }
 
+    if (!dryRun) {
+      const leaseToken = randomString(32);
+      const teraz = Date.now();
+      const przejeto = await repo.przejmijMigracje({
+        broadcasterId: owner.user_id, leaseToken, teraz, leaseMs: 240_000,
+      });
+      if (!przejeto) {
+        const stan = await repo.pobierzStanMigracji({ broadcasterId: owner.user_id });
+        if (stan?.status === 'completed') {
+          return json({ success: true, already_completed: true, broadcaster_id: owner.user_id });
+        }
+        return json({ error: 'migration_locked', retry_after_ms: Math.max(0, Number(stan?.lease_expires_at_ms || teraz) - teraz) }, 409);
+      }
+
+      try {
+        const stan = await repo.pobierzStanMigracji({ broadcasterId: owner.user_id });
+        if (!stan || stan.status !== 'running' || stan.lease_token !== leaseToken) {
+          return json({ error: 'migration_state_unavailable' }, 409);
+        }
+        let counts;
+        try {
+          counts = JSON.parse(stan.counts_json || '{}');
+        } catch {
+          throw new Error('Nieprawidłowe liczniki zapisane w stanie migracji.');
+        }
+        const raport = {
+          dry_run: false, broadcaster_id: owner.user_id,
+          links_seen: Number(counts.links_seen || 0),
+          links_valid: Number(counts.links_valid || 0),
+          links_imported: Number(counts.links_imported || 0),
+          links_skipped: Number(counts.links_skipped || 0),
+          subscriptions_seen: Number(counts.subscriptions_seen || 0),
+          subscriptions_valid: Number(counts.subscriptions_valid || 0),
+          subscriptions_imported: Number(counts.subscriptions_imported || 0),
+          subscriptions_skipped: Number(counts.subscriptions_skipped || 0),
+          errors: [],
+        };
+        const dodajBlad = (typ, key, reason) => {
+          if (raport.errors.length < 50) raport.errors.push({ type: typ, key, reason });
+        };
+        const phase = stan.phase === 'subscriptions' ? 'subscriptions' : 'links';
+        const prefix = phase === 'links' ? 'link:discord:' : 'sub:';
+        const page = await env.SUBS_KV.list({
+          prefix, cursor: stan.cursor || undefined, limit: 50,
+        });
+
+        if (phase === 'links') {
+          for (const key of page.keys) {
+            raport.links_seen++;
+            const record = await env.SUBS_KV.get(key.name, 'json');
+            const discordIdZKlucza = key.name.slice('link:discord:'.length);
+            const discordId = String(record?.discord_id || '');
+            const kickId = String(record?.kick_user_id || '');
+            const username = record?.username;
+            if (
+              !/^\\d{17,20}$/.test(discordIdZKlucza)
+              || discordId !== discordIdZKlucza
+              || !/^\\d{17,20}$/.test(discordId)
+              || !/^[0-9]{1,32}$/.test(kickId)
+              || typeof username !== 'string' || !USERNAME_RE.test(username)
+            ) {
+              raport.links_skipped++;
+              dodajBlad('link', key.name, 'invalid_record');
+              continue;
+            }
+            raport.links_valid++;
+            try {
+              await repo.polaczKonto({
+                broadcasterId: owner.user_id, discordUserId: discordId,
+                kickUserId: kickId, kickUsername: username,
+              });
+              raport.links_imported++;
+            } catch (error) {
+              raport.links_skipped++;
+              dodajBlad('link', key.name, String(error.message).slice(0, 160));
+            }
+          }
+        } else {
+          for (const key of page.keys) {
+            if (key.name.startsWith('sub:user_id:')) continue;
+            raport.subscriptions_seen++;
+            const record = await env.SUBS_KV.get(key.name, 'json');
+            const expiry = Date.parse(record?.expires_at || '');
+            const username = record?.username;
+            const expectedKey = typeof username === 'string' ? `sub:${username.toLowerCase()}` : '';
+            const kickId = record?.user_id == null || record.user_id === '' ? null : String(record.user_id);
+            if (
+              typeof username !== 'string' || !USERNAME_RE.test(username)
+              || key.name !== expectedKey
+              || !Number.isSafeInteger(expiry) || expiry <= 0
+              || (kickId !== null && !/^[0-9]{1,32}$/.test(kickId))
+            ) {
+              raport.subscriptions_skipped++;
+              dodajBlad('subscription', key.name, 'invalid_record');
+              continue;
+            }
+            raport.subscriptions_valid++;
+            try {
+              await repo.zapiszSubskrypcje({
+                broadcasterId: owner.user_id, kickUserId: kickId,
+                kickUsername: username, expiresAtMs: expiry,
+                source: ['channel.subscription.new', 'channel.subscription.renewal', 'channel.subscription.gifts', 'gift', 'new', 'renewal', 'admin'].includes(record.source) ? record.source : 'admin',
+              });
+              raport.subscriptions_imported++;
+            } catch (error) {
+              raport.subscriptions_skipped++;
+              dodajBlad('subscription', key.name, String(error.message).slice(0, 160));
+            }
+          }
+        }
+
+        let nextPhase = phase;
+        let nextCursor = page.list_complete ? null : page.cursor;
+        if (phase === 'links' && page.list_complete) {
+          nextPhase = 'subscriptions';
+          nextCursor = null;
+        }
+        const zakonczone = phase === 'subscriptions' && page.list_complete;
+        const zapisano = await repo.zapiszPostepMigracji({
+          broadcasterId: owner.user_id, leaseToken,
+          phase: zakonczone ? 'completed' : nextPhase,
+          cursor: nextCursor,
+          counts: {
+            links_seen: raport.links_seen, links_valid: raport.links_valid,
+            links_imported: raport.links_imported, links_skipped: raport.links_skipped,
+            subscriptions_seen: raport.subscriptions_seen,
+            subscriptions_valid: raport.subscriptions_valid,
+            subscriptions_imported: raport.subscriptions_imported,
+            subscriptions_skipped: raport.subscriptions_skipped,
+          },
+          teraz: Date.now(), leaseMs: 240_000,
+        });
+        if (!zapisano) return json({ error: 'migration_lease_lost' }, 409);
+        if (zakonczone) {
+          const zakonczono = await repo.zakonczMigracje({
+            broadcasterId: owner.user_id, leaseToken, teraz: Date.now(),
+          });
+          if (!zakonczono) return json({ error: 'migration_lease_lost' }, 409);
+        }
+        return json({
+          success: true, complete: zakonczone,
+          phase: zakonczone ? 'completed' : nextPhase,
+          has_more: !zakonczone,
+          processed_this_request: page.keys.length,
+          ...raport,
+        });
+      } finally {
+        await repo.zwolnijMigracje({
+          broadcasterId: owner.user_id, leaseToken, teraz: Date.now(),
+        }).catch((error) => console.error('Zwolnienie blokady migracji:', error.message));
+      }
+    }
+
     const raport = {
       dry_run: dryRun, broadcaster_id: owner.user_id,
       links_seen: 0, links_valid: 0, links_imported: 0, links_skipped: 0,
