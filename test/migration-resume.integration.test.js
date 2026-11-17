@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import worker from '../index.js';
 
 const sekret = 'test-secret';
+const sekretAdmina = 'test-admin-secret';
 const kanal = '123456789';
 const token = 'test-access-token';
 const teraz = Date.now();
@@ -161,6 +162,7 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
 
   const env = {
     BOT_API_SECRET: sekret,
+    ADMIN_API_SECRET: sekretAdmina,
     KICK_BROADCASTER_ID: kanal,
     D1_ENABLED: 'false',
     DB: db,
@@ -220,7 +222,7 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
 function requestMigracji() {
   return new Request('https://worker.test/api/admin/migrate-kv?dry_run=false', {
     method: 'POST',
-    headers: { Authorization: 'Bearer ' + sekret },
+    headers: { Authorization: 'Bearer ' + sekretAdmina },
   });
 }
 
