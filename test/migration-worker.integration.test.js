@@ -272,3 +272,45 @@ test('dry-run paginuje KV bez przekraczania budżetu subrequests i bez zapisów'
     globalThis.fetch = poprzedniFetch;
   }
 });
+
+
+test('import wygasłego OAuth odświeża token z timeoutem i nie przechodzi dalej po awarii D1', async () => {
+  const { env, zapisyKv, wywolaniaD1 } = utworzEnv({ tokenWazny: false });
+  const poprzedniFetch = globalThis.fetch;
+  const wywolania = [];
+  globalThis.fetch = async (url, options = {}) => {
+    const adres = String(url);
+    wywolania.push(adres);
+    assert.ok(options.signal instanceof AbortSignal);
+    assert.equal(options.signal.aborted, false);
+    if (adres === 'https://id.kick.com/oauth/token') {
+      assert.equal(options.method, 'POST');
+      return new Response(JSON.stringify({
+        access_token: 'refreshed-access-token',
+        refresh_token: 'refreshed-refresh-token',
+        expires_in: 3600,
+      }), { status: 200 });
+    }
+    assert.equal(adres, 'https://api.kick.com/public/v1/users');
+    return new Response(JSON.stringify({
+      data: [{ user_id: broadcasterId, username: 'testchannel' }],
+    }), { status: 200 });
+  };
+
+  try {
+    const response = await worker.fetch(new Request(
+      'https://worker.test/api/admin/migrate-kv?dry_run=false',
+      { method: 'POST', headers: { Authorization: `Bearer ${sekret}` } },
+    ), env);
+    assert.equal(response.status, 500);
+    assert.deepEqual(wywolania, [
+      'https://id.kick.com/oauth/token',
+      'https://api.kick.com/public/v1/users',
+    ]);
+    assert.equal(zapisyKv.length, 1);
+    assert.equal(zapisyKv[0].operacja, 'put');
+    assert.equal(wywolaniaD1[0].typ, 'batch');
+  } finally {
+    globalThis.fetch = poprzedniFetch;
+  }
+});
