@@ -5,24 +5,68 @@ import { OAuthTokenStore } from '../oauth-token-store.js';
 function utworzMagazyn() {
   const dane = new Map();
   let alarm = null;
-  let kolejka = Promise.resolve();
+  const sql = {
+    exec(tekst, ...args) {
+      const q = tekst.replace(/\\s+/g, ' ').trim().toUpperCase();
+      if (q.startsWith('CREATE TABLE') || q.startsWith('CREATE INDEX')) return { toArray: () => [] };
+      if (q.startsWith('INSERT INTO OAUTH_TOKENS')) {
+        const [token, typ, json, wygasa_at] = args;
+        if (dane.has(token)) throw new Error('UNIQUE constraint failed');
+        dane.set(token, { typ, dane: json, wygasa_at, rezerwacja_id: null, rezerwacja_do: null });
+        return { toArray: () => [] };
+      }
+      if (q.startsWith('SELECT TYP, DANE, WYGASA_AT, REZERWACJA_DO')) {
+        const wpis = dane.get(args[0]);
+        return { toArray: () => wpis ? [{ typ: wpis.typ, dane: wpis.dane, wygasa_at: wpis.wygasa_at, rezerwacja_do: wpis.rezerwacja_do }] : [] };
+      }
+      if (q.startsWith('DELETE FROM OAUTH_TOKENS WHERE TOKEN = ? AND TYP = ? AND REZERWACJA_ID = ?')) {
+        const [token, typ, id] = args;
+        const wpis = dane.get(token);
+        if (!wpis || wpis.typ !== typ || wpis.rezerwacja_id !== id) return { toArray: () => [] };
+        dane.delete(token);
+        return { toArray: () => [{ token }] };
+      }
+      if (q.startsWith('DELETE FROM OAUTH_TOKENS WHERE TOKEN = ?')) {
+        dane.delete(args[0]);
+        return { toArray: () => [] };
+      }
+      if (q.startsWith('DELETE FROM OAUTH_TOKENS WHERE WYGASA_AT <= ?')) {
+        for (const [token, wpis] of dane) if (wpis.wygasa_at <= args[0]) dane.delete(token);
+        return { toArray: () => [] };
+      }
+      if (q.startsWith('UPDATE OAUTH_TOKENS SET REZERWACJA_ID = ?, REZERWACJA_DO = ?')) {
+        const [id, doKiedy, token] = args;
+        const wpis = dane.get(token);
+        if (wpis) { wpis.rezerwacja_id = id; wpis.rezerwacja_do = doKiedy; }
+        return { toArray: () => [] };
+      }
+      if (q.startsWith('UPDATE OAUTH_TOKENS SET REZERWACJA_ID = NULL')) {
+        const [token, typ, id] = args;
+        const wpis = dane.get(token);
+        if (!wpis || wpis.typ !== typ || wpis.rezerwacja_id !== id) return { toArray: () => [] };
+        wpis.rezerwacja_id = null;
+        wpis.rezerwacja_do = null;
+        return { toArray: () => [{ token }] };
+      }
+      if (q.startsWith('SELECT MIN(WYGASA_AT)')) {
+        const wartosci = [...dane.values()].map((x) => x.wygasa_at);
+        return { toArray: () => [{ najblizsze: wartosci.length ? Math.min(...wartosci) : null }] };
+      }
+      throw new Error('Nieobsługiwane SQL w teście: ' + tekst);
+    },
+  };
   const ctx = {
     storage: {
+      sql,
+      transactionSync(fn) {
+        const kopia = structuredClone([...dane.entries()]);
+        try { return fn(); } catch (error) {
+          dane.clear();
+          for (const [klucz, wartosc] of kopia) dane.set(klucz, wartosc);
+          throw error;
+        }
+      },
       async setAlarm(czas) { alarm = czas; },
-      async list({ prefix }) {
-        return new Map([...dane.entries()].filter(([klucz]) => klucz.startsWith(prefix)));
-      },
-      async delete(klucz) { return dane.delete(klucz); },
-      async getAlarm() { return alarm; },
-      transaction(fn) {
-        const wynik = kolejka.then(() => fn({
-          async get(klucz) { return dane.get(klucz); },
-          async put(klucz, wartosc) { dane.set(klucz, structuredClone(wartosc)); },
-          async delete(klucz) { return dane.delete(klucz); },
-        }));
-        kolejka = wynik.then(() => undefined, () => undefined);
-        return wynik;
-      },
     },
   };
   const magazyn = new OAuthTokenStore(ctx, {});
@@ -33,21 +77,21 @@ const token = 'AbCdEfGhIjKlMnOpQrStUvWx';
 
 test('token można zużyć dokładnie jeden raz', async () => {
   const { magazyn } = utworzMagazyn();
-  const dane = { verifier: 'sekret-pkce', discord_id: '12345678901234567' };
-  await magazyn.zapisz(token, 'oauth-state', dane, Date.now() + 60_000);
+  const wartosc = { verifier: 'sekret-pkce', discord_id: '12345678901234567' };
+  await magazyn.zapisz(token, 'oauth-state', wartosc, Date.now() + 60_000);
   const wyniki = await Promise.all([
     magazyn.zuzyj(token, 'oauth-state'),
     magazyn.zuzyj(token, 'oauth-state'),
   ]);
   assert.equal(wyniki.filter(Boolean).length, 1);
-  assert.deepEqual(wyniki.find(Boolean), dane);
+  assert.deepEqual(wyniki.find(Boolean), wartosc);
 });
 
 test('token wygasły jest usuwany i nie może być użyty', async () => {
   const { magazyn } = utworzMagazyn();
-  await magazyn.zapisz(token, 'owner-start', { created_at: 1 }, 10_000);
-  assert.equal(await magazyn.zuzyj(token, 'owner-start', 10_000), null);
-  assert.equal(await magazyn.zuzyj(token, 'owner-start', 10_001), null);
+  await magazyn.zapisz(token, 'owner-start', { created_at: 1 }, Date.now() + 60_000);
+  assert.equal(await magazyn.zuzyj(token, 'owner-start', Date.now() + 60_000), null);
+  assert.equal(await magazyn.zuzyj(token, 'owner-start'), null);
 });
 
 test('token o innym typie jest kasowany bez ujawnienia danych', async () => {
@@ -62,7 +106,7 @@ test('nie pozwala nadpisać istniejącego tokena', async () => {
   await magazyn.zapisz(token, 'oauth-state', { verifier: 'pierwszy' }, Date.now() + 60_000);
   await assert.rejects(
     magazyn.zapisz(token, 'oauth-state', { verifier: 'drugi' }, Date.now() + 60_000),
-    /już istnieje/,
+    /UNIQUE/,
   );
   assert.deepEqual(await magazyn.zuzyj(token, 'oauth-state'), { verifier: 'pierwszy' });
 });
@@ -110,8 +154,10 @@ test('wygasła rezerwacja może zostać przejęta po upływie lease', async () =
   assert.equal(await magazyn.zakoncz(token, 'oauth-state', pierwsza.id), false);
 });
 
-test('zapis tokena ustawia alarm porządkowy', async () => {
-  const stan = utworzMagazyn();
-  await stan.magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, Date.now() + 60_000);
-  assert.ok(stan.pobierzAlarm() > Date.now());
+test('alarm usuwa wygasłe tokeny i ustawia termin kolejnego czyszczenia', async () => {
+  const { magazyn, dane, pobierzAlarm } = utworzMagazyn();
+  await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, Date.now() + 60_000);
+  assert.ok(pobierzAlarm() > Date.now());
+  await magazyn.alarm();
+  assert.equal(dane.size, 1);
 });
