@@ -7,7 +7,7 @@ const kanal = '123456789';
 const token = 'test-access-token';
 const teraz = Date.now();
 
-function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0 } = {}) {
+function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0, countsJson = null, cursorPoczatkowy = null } = {}) {
   const rekordy = new Map();
   const subskrypcjeD1 = new Map();
   const markery = new Set();
@@ -107,7 +107,7 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, blo
         const [broadcasterId, leaseToken, expiry, started, changed, now, tokenAgain] = polecenia[1].args;
         let zmiany = 0;
         if (!aktywny && (!stan || stan.status !== 'completed') && (!stan || stan.lease_expires_at_ms == null || stan.lease_expires_at_ms <= now || stan.lease_token === tokenAgain)) {
-          if (!stan) stan = { broadcaster_id: broadcasterId, status: 'running', phase: fazaPoczatkowa, cursor: null, counts_json: fazaPoczatkowa === 'subscriptions' ? JSON.stringify({ links_seen: 1, links_valid: 1, links_imported: 1, links_skipped: 0, links_conflicts: 0 }) : '{}', lease_token: leaseToken, lease_expires_at_ms: expiry, started_at_ms: started, updated_at_ms: changed };
+          if (!stan) stan = { broadcaster_id: broadcasterId, status: 'running', phase: fazaPoczatkowa, cursor: cursorPoczatkowy, counts_json: countsJson ?? (fazaPoczatkowa === 'subscriptions' ? JSON.stringify({ links_seen: 1, links_valid: 1, links_imported: 1, links_skipped: 0, links_conflicts: 0 }) : '{}'), lease_token: leaseToken, lease_expires_at_ms: expiry, started_at_ms: started, updated_at_ms: changed };
           else Object.assign(stan, { lease_token: leaseToken, lease_expires_at_ms: expiry, updated_at_ms: changed });
           zmiany = 1;
         }
@@ -300,5 +300,32 @@ test('wznowienie po awarii finalizacji nie przetwarza ponownie stron KV', async 
     assert.deepEqual(JSON.parse(srodowisko.stan().counts_json), licznikiPoPierwszej);
     assert.equal(srodowisko.subskrypcjeD1.size, 3);
     assert.equal(srodowisko.stan().status, 'completed');
+  });
+});
+
+
+test('odrzuca counts_json będące tablicą i zwalnia lease', async () => {
+  const srodowisko = utworzSrodowisko({ countsJson: '[]' });
+  await zFetchiemKick(async () => {
+    const response = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(response.status, 500);
+    assert.equal(srodowisko.stan().lease_token, null);
+    assert.equal(srodowisko.rekordy.size, 0);
+  });
+});
+
+test('odrzuca niekompletny cursor przed odczytem strony KV', async () => {
+  const srodowisko = utworzSrodowisko({ cursorPoczatkowy: 123 });
+  let listy = 0;
+  const oryginalnaLista = srodowisko.env.SUBS_KV.list;
+  srodowisko.env.SUBS_KV.list = async (...args) => {
+    listy++;
+    return oryginalnaLista(...args);
+  };
+  await zFetchiemKick(async () => {
+    const response = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(response.status, 500);
+    assert.equal(listy, 0);
+    assert.equal(srodowisko.stan().lease_token, null);
   });
 });
