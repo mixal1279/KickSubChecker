@@ -166,11 +166,24 @@ export function utworzRepozytoriumD1(db) {
           (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
         VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
-          kick_user_id = COALESCE(excluded.kick_user_id, subscriptions.kick_user_id),
-          kick_username = excluded.kick_username,
+          kick_user_id = CASE
+            WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+            THEN COALESCE(excluded.kick_user_id, subscriptions.kick_user_id)
+            ELSE subscriptions.kick_user_id
+          END,
+          kick_username = CASE
+            WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+            THEN excluded.kick_username ELSE subscriptions.kick_username
+          END,
           expires_at_ms = MAX(subscriptions.expires_at_ms, excluded.expires_at_ms),
-          source = excluded.source,
-          updated_at_ms = excluded.updated_at_ms
+          source = CASE
+            WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+            THEN excluded.source ELSE subscriptions.source
+          END,
+          updated_at_ms = CASE
+            WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+            THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms
+          END
       `).bind(kanal, klucz, kickId, nick, expiry, source, Date.now()).run();
       sprawdzWynik(wynik, 'Zapis subskrypcji');
     },
