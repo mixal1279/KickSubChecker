@@ -334,3 +334,81 @@ test('liczniki migracji są pobierane z trwałych markerów D1', async () => {
   assert.match(db.wywolania[0].sql, /FROM migration_items/);
   assert.deepEqual(db.wywolania[0].args, ['12345']);
 });
+
+
+test('równoległe żądania nie mogą jednocześnie przejąć lease tego samego kanału', async () => {
+  let stan = null;
+  let kolejka = Promise.resolve();
+  const db = {
+    prepare(sql) {
+      return {
+        bind(...args) {
+          return {
+            async run() {
+              let zwolnij;
+              const poprzedni = kolejka;
+              kolejka = new Promise((resolve) => { zwolnij = resolve; });
+              await poprzedni;
+              try {
+                const [kanal, token, expiry, started, updated, teraz, tokenPowtorzony] = args;
+                if (!stan) {
+                  stan = { broadcaster_id: kanal, status: 'running', lease_token: token, lease_expires_at_ms: expiry, started_at_ms: started, updated_at_ms: updated };
+                  return { success: true, meta: { changes: 1 } };
+                }
+                if (stan.status !== 'completed' && (
+                  stan.lease_expires_at_ms == null
+                  || stan.lease_expires_at_ms <= teraz
+                  || stan.lease_token === tokenPowtorzony
+                )) {
+                  stan.lease_token = token;
+                  stan.lease_expires_at_ms = expiry;
+                  stan.updated_at_ms = updated;
+                  return { success: true, meta: { changes: 1 } };
+                }
+                return { success: true, meta: { changes: 0 } };
+              } finally {
+                zwolnij();
+              }
+            },
+          };
+        },
+      };
+    },
+    async batch() { throw new Error('Nieoczekiwany batch'); },
+  };
+  const repo = utworzRepozytoriumD1(db);
+  const [pierwszy, drugi] = await Promise.all([
+    repo.przejmijMigracje({ broadcasterId: '12345', leaseToken: 'token-pierwszy-abcdefghijkl', teraz: 1_000_000, leaseMs: 60_000 }),
+    repo.przejmijMigracje({ broadcasterId: '12345', leaseToken: 'token-drugi-abcdefghijkl', teraz: 1_000_000, leaseMs: 60_000 }),
+  ]);
+  assert.deepEqual([pierwszy, drugi].sort(), [false, true]);
+  assert.ok(['token-pierwszy-abcdefghijkl', 'token-drugi-abcdefghijkl'].includes(stan.lease_token));
+});
+
+test('wygasły lease może zostać odzyskany, ale aktywny lease pozostaje chroniony', async () => {
+  let stan = null;
+  const db = {
+    prepare() {
+      return { bind(...args) { return { async run() {
+        const [kanal, token, expiry, started, updated, teraz, tokenPowtorzony] = args;
+        if (!stan) {
+          stan = { broadcaster_id: kanal, status: 'running', lease_token: token, lease_expires_at_ms: expiry, started_at_ms: started, updated_at_ms: updated };
+          return { success: true, meta: { changes: 1 } };
+        }
+        if (stan.status !== 'completed' && (
+          stan.lease_expires_at_ms == null || stan.lease_expires_at_ms <= teraz || stan.lease_token === tokenPowtorzony
+        )) {
+          stan.lease_token = token; stan.lease_expires_at_ms = expiry;
+          return { success: true, meta: { changes: 1 } };
+        }
+        return { success: true, meta: { changes: 0 } };
+      } }; } };
+    },
+    async batch() { throw new Error('Nieoczekiwany batch'); },
+  };
+  const repo = utworzRepozytoriumD1(db);
+  assert.equal(await repo.przejmijMigracje({ broadcasterId: '12345', leaseToken: 'token-pierwszy-abcdefghijkl', teraz: 1_000_000, leaseMs: 10_000 }), true);
+  assert.equal(await repo.przejmijMigracje({ broadcasterId: '12345', leaseToken: 'token-drugi-abcdefghijkl', teraz: 1_005_000, leaseMs: 10_000 }), false);
+  assert.equal(await repo.przejmijMigracje({ broadcasterId: '12345', leaseToken: 'token-drugi-abcdefghijkl', teraz: 1_011_000, leaseMs: 10_000 }), true);
+  assert.equal(stan.lease_token, 'token-drugi-abcdefghijkl');
+});
