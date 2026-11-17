@@ -343,6 +343,23 @@ export function utworzRepozytoriumD1(db) {
       return Number(wyniki[0]?.meta?.changes || 0) === 1;
     },
 
+
+    async policzElementyMigracji({ broadcasterId }) {
+      const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
+      const wynik = await db.prepare(`
+        SELECT
+          SUM(CASE WHEN phase = 'links' THEN 1 ELSE 0 END) AS links,
+          SUM(CASE WHEN phase = 'subscriptions' THEN 1 ELSE 0 END) AS subscriptions,
+          COUNT(*) AS total
+        FROM migration_items WHERE broadcaster_id = ?
+      `).bind(kanal).first();
+      return {
+        links: Number(wynik?.links || 0),
+        subscriptions: Number(wynik?.subscriptions || 0),
+        total: Number(wynik?.total || 0),
+      };
+    },
+
     async przejmijMigracje({ broadcasterId, leaseToken, teraz = Date.now(), leaseMs = 60_000 }) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
       if (typeof leaseToken !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(leaseToken)) {
