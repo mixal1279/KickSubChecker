@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import worker from '../index.js';
 
 const sekret = 'test-secret';
+const sekretAdmina = 'test-admin-secret';
 const broadcasterId = '123456789';
 
 function utworzEnv({
@@ -34,6 +35,7 @@ function utworzEnv({
 
   const env = {
     BOT_API_SECRET: sekret,
+    ADMIN_API_SECRET: sekretAdmina,
     KICK_BROADCASTER_ID: broadcasterId,
     DB: db,
     D1_ENABLED: 'false',
@@ -73,7 +75,7 @@ function utworzEnv({
 function utworzRequest() {
   return new Request('https://worker.test/api/admin/migrate-kv?dry_run=true', {
     method: 'POST',
-    headers: { Authorization: `Bearer ${sekret}` },
+    headers: { Authorization: `Bearer ${sekretAdmina}` },
   });
 }
 
@@ -273,7 +275,7 @@ test('dry-run paginuje KV bez przekraczania budżetu subrequests i bez zapisów'
     url.searchParams.set('links_cursor', raportPierwszy.links_cursor);
     url.searchParams.set('subscriptions_cursor', raportPierwszy.subscriptions_cursor);
     const druga = await worker.fetch(new Request(url, {
-      method: 'POST', headers: { Authorization: `Bearer ${sekret}` },
+      method: 'POST', headers: { Authorization: `Bearer ${sekretAdmina}` },
     }), env);
     assert.equal(druga.status, 200);
     const raportDrugi = await druga.json();
@@ -318,7 +320,7 @@ test('import wygasłego OAuth odświeża token z timeoutem i nie przechodzi dale
   try {
     const response = await worker.fetch(new Request(
       'https://worker.test/api/admin/migrate-kv?dry_run=false',
-      { method: 'POST', headers: { Authorization: `Bearer ${sekret}` } },
+      { method: 'POST', headers: { Authorization: `Bearer ${sekretAdmina}` } },
     ), env);
     assert.equal(response.status, 500);
     assert.deepEqual(wywolania, [
@@ -352,7 +354,7 @@ test('błąd OAuth nie ujawnia treści odpowiedzi ani tokenów w logach', async 
   try {
     const response = await worker.fetch(new Request(
       'https://worker.test/api/admin/migrate-kv?dry_run=false',
-      { method: 'POST', headers: { Authorization: `Bearer ${sekret}` } },
+      { method: 'POST', headers: { Authorization: `Bearer ${sekretAdmina}` } },
     ), env);
     assert.equal(response.status, 500);
     const body = await response.text();
