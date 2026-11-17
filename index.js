@@ -160,16 +160,27 @@ async function saveTokens(env, tokens) {
     expires_at: Date.now() + expiresIn * 1000,
   }));
 }
-async function getBroadcasterAccessToken(env) {
+async function getBroadcasterAccessToken(env, timeoutMs = 0) {
   const raw = await env.SUBS_KV.get('ljay:tokens', 'json');
   if (!raw) throw new Error('Brak tokenów właściciela kanału. Administrator musi wygenerować link przez /api/owner/start.');
   if (Date.now() < raw.expires_at - 60_000) return raw.access_token;
-  const response = await fetch(KICK_TOKEN_URL, { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: raw.refresh_token, client_id: env.KICK_CLIENT_ID, client_secret: env.KICK_CLIENT_SECRET }) });
+  const opcje = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token', refresh_token: raw.refresh_token,
+      client_id: env.KICK_CLIENT_ID, client_secret: env.KICK_CLIENT_SECRET,
+    }),
+  };
+  if (timeoutMs > 0) opcje.signal = AbortSignal.timeout(timeoutMs);
+  const response = await fetch(KICK_TOKEN_URL, opcje);
   const tokens = await parseJsonResponse(response, 'Odświeżanie tokenu Kick');
   await saveTokens(env, tokens); return tokens.access_token;
 }
-async function kickCurrentUser(accessToken) {
-  const response = await fetch(KICK_USERS_URL, { headers: { Authorization: `Bearer ${accessToken}` } });
+async function kickCurrentUser(accessToken, timeoutMs = 0) {
+  const opcje = { headers: { Authorization: `Bearer ${accessToken}` } };
+  if (timeoutMs > 0) opcje.signal = AbortSignal.timeout(timeoutMs);
+  const response = await fetch(KICK_USERS_URL, opcje);
   const data = await parseJsonResponse(response, 'Pobieranie tożsamości Kick');
   const user = Array.isArray(data.data) ? data.data[0] : data.data;
   if (
@@ -600,9 +611,9 @@ async function handleApi(request, env) {
     const tokenDoMigracji = await pobierzTokenMigracji({
       env,
       dryRun,
-      odswiezToken: getBroadcasterAccessToken,
+      odswiezToken: (srodowisko) => getBroadcasterAccessToken(srodowisko, 10_000),
     });
-    const owner = await kickCurrentUser(tokenDoMigracji);
+    const owner = await kickCurrentUser(tokenDoMigracji, 10_000);
     const configuredId = String(env.KICK_BROADCASTER_ID || '').trim();
     const storedId = await env.SUBS_KV.get('config:broadcaster_id');
     if (
