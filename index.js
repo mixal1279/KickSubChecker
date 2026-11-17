@@ -559,13 +559,16 @@ async function handleApi(request, env) {
   }
   if (url.pathname === '/api/admin/migrate-kv') {
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
-    const repo = repozytorium(env, true);
-    if (!repo) return json({ error: 'd1_not_configured' }, 503);
+    const nieznaneParametry = [...url.searchParams.keys()].filter((parametr) => parametr !== 'dry_run');
+    if (nieznaneParametry.length > 0) return json({ error: 'invalid_query_parameter' }, 400);
+    if (request.body !== null) return json({ error: 'unexpected_request_body' }, 400);
     const parametryDryRun = url.searchParams.getAll('dry_run');
     if (parametryDryRun.length > 1 || (parametryDryRun.length === 1 && !['true', 'false'].includes(parametryDryRun[0]))) {
       return json({ error: 'invalid_dry_run' }, 400);
     }
     const dryRun = parametryDryRun[0] !== 'false';
+    const repo = repozytorium(env, true);
+    if (!repo) return json({ error: 'd1_not_configured' }, 503);
     const tokenDoMigracji = await pobierzTokenMigracji({
       env,
       dryRun,
