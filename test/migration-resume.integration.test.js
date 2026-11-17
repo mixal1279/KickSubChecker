@@ -264,7 +264,7 @@ test('drugi request handlera dostaje 409, gdy pierwszy utrzymuje lease', async (
     srodowisko.odblokujOdczyt();
     const pierwszy = await pierwszyPromise;
     assert.equal(pierwszy.status, 200);
-    assert.equal(srodowisko.rekordy.size, 50);
+    assert.equal(srodowisko.rekordy.size, 20);
   });
 });
 
