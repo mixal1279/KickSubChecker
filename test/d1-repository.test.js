@@ -274,7 +274,7 @@ test('checkpoint odrzuca niepoprawny etap i kursor przed SQL', async () => {
 
 
 test('import powiązania z KV używa markera idempotencji i nie tworzy audytu przy ponowieniu', async () => {
-  const db = utworzFakeD1();
+  const db = utworzFakeD1({ pierwszy: { imported: 1 } });
   const repo = utworzRepozytoriumD1(db);
   const nowy = await repo.importujPowiazanieMigracja({
     broadcasterId: '12345', sourceKey: 'link:discord:23456789012345678',
@@ -292,7 +292,7 @@ test('import powiązania z KV używa markera idempotencji i nie tworzy audytu pr
 });
 
 test('import subskrypcji z KV zapisuje marker i rekord w jednej paczce', async () => {
-  const db = utworzFakeD1();
+  const db = utworzFakeD1({ pierwszy: { imported: 1 } });
   const repo = utworzRepozytoriumD1(db);
   const nowa = await repo.importujSubskrypcjeMigracja({
     broadcasterId: '12345', sourceKey: 'sub:testuser',
