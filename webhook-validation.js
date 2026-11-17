@@ -54,3 +54,9 @@ export function walidujWynikRejestracjiWebhookow(data) {
     brakujace,
   };
 }
+
+export function walidujIdSubskrypcjiWebhooka(idNaglowka, typ, zapisaneId) {
+  if (typeof idNaglowka !== 'string' || !/^[0-9A-HJKMNP-TV-Z]{26}$/.test(idNaglowka)) return false;
+  if (!OBSLUGIWANE_EVENTY_KICK.includes(typ) || !zapisaneId || typeof zapisaneId !== 'object') return false;
+  return zapisaneId[typ] === idNaglowka;
+}
