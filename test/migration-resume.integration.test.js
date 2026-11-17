@@ -79,11 +79,13 @@ function utworzSrodowisko({ bladCheckpoint = false, blokujPierwszyOdczyt = false
               wywolania.push({ typ: 'first', sql, args });
               if (sql.includes('FROM migration_runs')) return stan ? { ...stan } : null;
               if (sql.includes('FROM migration_items')) {
+                if (sql.includes('SUM(CASE')) {
+                  const links = [...markery].filter(x => x.startsWith('links|')).length;
+                  const subscriptions = [...markery].filter(x => x.startsWith('subscriptions|')).length;
+                  return { links, subscriptions, total: links + subscriptions };
+                }
                 if (sql.includes("phase = 'links'")) return markery.has('links|' + args[1]) ? { imported: 1 } : null;
                 if (sql.includes("phase = 'subscriptions'")) return markery.has('subscriptions|' + args[1]) ? { imported: 1 } : null;
-                const links = [...markery].filter(x => x.startsWith('links|')).length;
-                const subscriptions = [...markery].filter(x => x.startsWith('subscriptions|')).length;
-                return { links, subscriptions, total: links + subscriptions };
               }
               throw new Error('Nieobsługiwane SQL first: ' + sql);
             },
