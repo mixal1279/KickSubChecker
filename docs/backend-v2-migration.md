@@ -69,9 +69,12 @@ Rejestracja eventów przekazuje `broadcaster_user_id` do Kick i zwraca błąd, j
 
 Repozytorium D1 aktualizuje nick, ID, źródło i znacznik czasu subskrypcji tylko wtedy, gdy przychodzący event nie jest starszy od zapisanego rekordu. Starszy event nie może cofnąć metadanych nowszej subskrypcji.
 
-## Ograniczenie jednorazowości OAuth
+## Jednorazowość OAuth — Durable Objects
 
-Jednorazowe tokeny startowe i `state` OAuth są obecnie przechowywane w KV. KV nie udostępnia atomowego compare-and-delete, więc dwa równoległe żądania mogą odczytać ten sam token przed jego usunięciem. Samo przeniesienie usuwania tokena nie daje gwarancji atomowości. Ścisłe zabezpieczenie wymaga koordynatora z atomową sekcją krytyczną, np. Cloudflare Durable Object, albo zmiany modelu przechowywania i konsumpcji tokenów. Do czasu wdrożenia takiego mechanizmu nie deklarujemy pełnej odporności na równoległe użycie tokenu.
+Tokeny `oauth-state`, `owner-start` i `link-start` są przechowywane w shardowanym Durable Object. Shard jest wybierany deterministycznie z pierwszego znaku losowego tokena, dzięki czemu operacje dla jednego tokena trafiają do tej samej instancji bez kierowania całego ruchu do jednego globalnego obiektu. Zapis i zużycie wykonują się w transakcji Durable Object: odczyt i usunięcie tokena są nierozdzielne, a równoległe callbacki nie mogą oba uzyskać tego samego wpisu.
+
+Po dodaniu bindingu wymagane jest wdrożenie migracji `v1` Durable Object. Stare, jeszcze aktywne linki zapisane w KV nie będą rozpoznawane przez nową ścieżkę — przed przełączeniem należy odczekać co najmniej 10 minut od wydania ostatnich linków albo unieważnić je i wygenerować ponownie. Nie wdrażaj konfiguracji produkcyjnej bez wcześniejszego sprawdzenia namespace i migracji w środowisku testowym.
+
 
 ## Testy wymagane przed cutoverem
 
