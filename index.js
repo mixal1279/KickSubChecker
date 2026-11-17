@@ -566,10 +566,12 @@ async function handleApi(request, env) {
     if (nieznaneParametry.length > 0) return json({ error: 'invalid_query_parameter' }, 400);
     if (request.body !== null) return json({ error: 'unexpected_request_body' }, 400);
     for (const parametr of dozwoloneParametry) {
-      if (url.searchParams.getAll(parametr).length > 1) return json({ error: 'duplicate_query_parameter' }, 400);
+      if (parametr !== 'dry_run' && url.searchParams.getAll(parametr).length > 1) {
+        return json({ error: 'duplicate_query_parameter' }, 400);
+      }
     }
     const parametryDryRun = url.searchParams.getAll('dry_run');
-    if (parametryDryRun.length === 1 && !['true', 'false'].includes(parametryDryRun[0])) {
+    if (parametryDryRun.length > 1 || (parametryDryRun.length === 1 && !['true', 'false'].includes(parametryDryRun[0]))) {
       return json({ error: 'invalid_dry_run' }, 400);
     }
     const dryRun = parametryDryRun[0] !== 'false';
