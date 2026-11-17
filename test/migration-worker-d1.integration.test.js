@@ -51,8 +51,13 @@ class AdapterD1Rest {
 
   async wykonaj(sql, params = []) {
     this.calls++;
-    const result = await zapytajCloudflare(this.path, { sql, params });
-    return result?.[0] || { success: true, results: [], meta: {} };
+    const result = await zapytajCloudflare(this.path, {
+      sql,
+      params: params.map((wartosc) => String(wartosc)),
+    });
+    const wynik = result?.[0] || { success: true, results: [], meta: {} };
+    if (wynik.success === false) throw new Error('Cloudflare D1 query failed.');
+    return wynik;
   }
 
   przygotuj(sql, params = []) {
