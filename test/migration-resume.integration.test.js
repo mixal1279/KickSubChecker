@@ -172,9 +172,20 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, blo
         }
         return null;
       },
-      async list({ prefix }) {
+      async list({ prefix, cursor, limit = 1000 }) {
         const keys = [...wpisy.keys()].filter(key => key.startsWith(prefix)).sort();
-        return { keys: keys.map(name => ({ name })), list_complete: true };
+        const offset = cursor == null ? 0 : Number(cursor);
+        if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1) {
+          throw new Error('Nieprawidłowy cursor lub limit KV.');
+        }
+        const wybrane = keys.slice(offset, offset + limit);
+        const nastepnyOffset = offset + wybrane.length;
+        const listComplete = nastepnyOffset >= keys.length;
+        return {
+          keys: wybrane.map(name => ({ name })),
+          list_complete: listComplete,
+          ...(listComplete ? {} : { cursor: String(nastepnyOffset) }),
+        };
       },
       async put() { throw new Error('Migracja nie powinna zapisywać KV.'); },
       async delete() { throw new Error('Migracja nie powinna usuwać KV.'); },
@@ -203,13 +214,13 @@ async function zFetchiemKick(fn) {
   try { return await fn(); } finally { globalThis.fetch = poprzedniFetch; }
 }
 
-test('handler wznowi import 50 linków po awarii checkpointu bez duplikatów', async () => {
+test('handler wznawia import 50 linków po awarii checkpointu i paginuje po 20', async () => {
   const srodowisko = utworzSrodowisko({ bladCheckpoint: true });
   await zFetchiemKick(async () => {
     const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
     assert.equal(pierwsza.status, 500);
-    assert.equal(srodowisko.rekordy.size, 50);
-    assert.equal(srodowisko.markery.size, 50);
+    assert.equal(srodowisko.rekordy.size, 20);
+    assert.equal(srodowisko.markery.size, 20);
     assert.equal(srodowisko.stan().phase, 'links');
     assert.equal(srodowisko.stan().cursor, null);
     assert.equal(JSON.parse(srodowisko.stan().counts_json).links_seen ?? 0, 0);
@@ -217,11 +228,27 @@ test('handler wznowi import 50 linków po awarii checkpointu bez duplikatów', a
     const wznowiona = await worker.fetch(requestMigracji(), srodowisko.env);
     assert.equal(wznowiona.status, 200);
     const raport = await wznowiona.json();
-    assert.equal(raport.processed_this_request, 50);
-    assert.equal(raport.links_imported, 50);
+    assert.equal(raport.processed_this_request, 20);
+    assert.equal(raport.links_imported, 20);
+    assert.equal(raport.has_more, true);
+    assert.equal(srodowisko.stan().cursor, '20');
+
+    const drugaStrona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(drugaStrona.status, 200);
+    const raportDrugi = await drugaStrona.json();
+    assert.equal(raportDrugi.processed_this_request, 20);
+    assert.equal(raportDrugi.links_imported, 40);
+    assert.equal(srodowisko.stan().cursor, '40');
+
+    const trzeciaStrona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(trzeciaStrona.status, 200);
+    const raportTrzeci = await trzeciaStrona.json();
+    assert.equal(raportTrzeci.processed_this_request, 10);
+    assert.equal(raportTrzeci.links_imported, 50);
     assert.equal(srodowisko.rekordy.size, 50);
     assert.equal(srodowisko.markery.size, 50);
     assert.equal(srodowisko.stan().phase, 'subscriptions');
+    assert.equal(srodowisko.stan().cursor, null);
     assert.equal(JSON.parse(srodowisko.stan().counts_json).links_seen, 50);
   });
 });
