@@ -551,8 +551,6 @@ async function handleApi(request, env) {
     ) return json({ error: 'broadcaster_mismatch' }, 409);
 
     if (!dryRun) {
-      await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
-      await env.SUBS_KV.put('config:broadcaster_username', owner.username);
       await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
     }
 
@@ -623,11 +621,11 @@ async function handleApi(request, env) {
             }
             raport.links_valid++;
             try {
-              await repo.polaczKonto({
-                broadcasterId: owner.user_id, discordUserId: discordId,
-                kickUserId: kickId, kickUsername: username,
+              const nowy = await repo.importujPowiazanieMigracja({
+                broadcasterId: owner.user_id, sourceKey: key.name,
+                discordUserId: discordId, kickUserId: kickId, kickUsername: username,
               });
-              raport.links_imported++;
+              if (nowy) raport.links_imported++;
             } catch (error) {
               if (/UNIQUE|constraint/i.test(String(error.message))) {
                 raport.links_skipped++;
@@ -658,12 +656,12 @@ async function handleApi(request, env) {
             }
             raport.subscriptions_valid++;
             try {
-              await repo.zapiszSubskrypcje({
-                broadcasterId: owner.user_id, kickUserId: kickId,
-                kickUsername: username, expiresAtMs: expiry,
+              const nowa = await repo.importujSubskrypcjeMigracja({
+                broadcasterId: owner.user_id, sourceKey: key.name,
+                kickUserId: kickId, kickUsername: username, expiresAtMs: expiry,
                 source: ['channel.subscription.new', 'channel.subscription.renewal', 'channel.subscription.gifts', 'gift', 'new', 'renewal', 'admin'].includes(record.source) ? record.source : 'admin',
               });
-              raport.subscriptions_imported++;
+              if (nowa) raport.subscriptions_imported++;
             } catch (error) {
               throw error;
             }
