@@ -58,6 +58,10 @@ function bearerAuthorized(request, env) {
   const value = request.headers.get('Authorization') || '';
   return Boolean(env.BOT_API_SECRET && constantTimeEqual(value, `Bearer ${env.BOT_API_SECRET}`));
 }
+function adminBearerAuthorized(request, env) {
+  const value = request.headers.get('Authorization') || '';
+  return Boolean(env.ADMIN_API_SECRET && constantTimeEqual(value, `Bearer ${env.ADMIN_API_SECRET}`));
+}
 async function parseJsonResponse(response, label) {
   const raw = await response.text();
   let data; try { data = raw ? JSON.parse(raw) : {}; } catch { throw new Error(`${label}: odpowiedź API nie jest poprawnym JSON-em.`); }
@@ -471,8 +475,12 @@ async function saveSubscription(env, subscription) {
 }
 
 async function handleApi(request, env) {
-  if (!bearerAuthorized(request, env)) return json({ error: 'unauthorized' }, 401);
   const url = new URL(request.url);
+  const administracyjny = url.pathname === '/api/admin/migrate-kv';
+  const autoryzowany = administracyjny
+    ? adminBearerAuthorized(request, env)
+    : bearerAuthorized(request, env);
+  if (!autoryzowany) return json({ error: 'unauthorized' }, 401);
   if (url.pathname === '/api/check') {
     const username = (url.searchParams.get('username') || '').replace(/^@/, '').trim();
     const userId = (url.searchParams.get('user_id') || '').trim();
@@ -536,7 +544,11 @@ async function handleApi(request, env) {
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
     const repo = repozytorium(env, true);
     if (!repo) return json({ error: 'd1_not_configured' }, 503);
-    const dryRun = url.searchParams.get('dry_run') !== 'false';
+    const parametryDryRun = url.searchParams.getAll('dry_run');
+    if (parametryDryRun.length > 1 || (parametryDryRun.length === 1 && !['true', 'false'].includes(parametryDryRun[0]))) {
+      return json({ error: 'invalid_dry_run' }, 400);
+    }
+    const dryRun = parametryDryRun[0] !== 'false';
     const tokenDoMigracji = await pobierzTokenMigracji({
       env,
       dryRun,
