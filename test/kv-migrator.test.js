@@ -19,6 +19,46 @@ function utworzEnv(tokeny) {
   };
 }
 
+test('dry-run preferuje token z magazynu autorytatywnego zamiast starego KV', async () => {
+  const env = utworzEnv({
+    access_token: 'stale-kv-token',
+    expires_at: Date.now() - 300_000,
+  });
+  let odczytyKv = 0;
+  const pobierz = env.SUBS_KV.get.bind(env.SUBS_KV);
+  env.SUBS_KV.get = async (...args) => { odczytyKv++; return pobierz(...args); };
+  const token = await pobierzTokenMigracji({
+    env,
+    dryRun: true,
+    pobierzToken: async () => ({
+      access_token: 'durable-object-token',
+      expires_at: Date.now() + 300_000,
+    }),
+    odswiezToken: async () => { throw new Error('dry-run nie może odświeżać tokena'); },
+  });
+  assert.equal(token, 'durable-object-token');
+  assert.equal(odczytyKv, 0);
+});
+
+test('dry-run nie używa ważnego legacy KV, gdy magazyn autorytatywny ma token wygasły', async () => {
+  const env = utworzEnv({
+    access_token: 'valid-but-stale-kv-token',
+    expires_at: Date.now() + 300_000,
+  });
+  await assert.rejects(
+    pobierzTokenMigracji({
+      env,
+      dryRun: true,
+      pobierzToken: async () => ({
+        access_token: 'expired-do-token',
+        expires_at: Date.now() - 1,
+      }),
+      odswiezToken: async () => 'unexpected-refresh',
+    }),
+    /dry_run_requires_valid_access_token/,
+  );
+});
+
 test('dry-run używa ważnego access tokena bez zapisu do KV', async () => {
   const env = utworzEnv({ access_token: 'valid-token', expires_at: Date.now() + 300_000 });
   let odswiezenia = 0;
