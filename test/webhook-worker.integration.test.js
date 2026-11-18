@@ -219,3 +219,21 @@ test('KV webhook odrzuca prezent zbyt duży dla budżetu operacji przed zapisami
   assert.equal(response.status, 413);
   assert.equal(env.zapisy.length, 0);
 });
+
+test('odrzuca zbyt duże body strumieniowe bez Content-Length przed buforowaniem całości', async () => {
+  const env = utworzEnv();
+  const request = new Request('https://worker.test/webhook', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array(256_001));
+        controller.close();
+      },
+    }),
+    duplex: 'half',
+  });
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 413);
+  assert.equal(env.zapisy.length, 0);
+});
