@@ -183,6 +183,7 @@ test('pełny handler migracji używa KV fixture i rzeczywistej testowej D1', { s
     ADMIN_API_SECRET: 'test-admin-secret',
     BOT_API_SECRET: 'test-bot-secret',
     D1_ENABLED: 'true',
+    MIGRATION_WRITE_FREEZE: 'true',
     KICK_BROADCASTER_ID: broadcasterId,
     SUBS_KV: kv,
     DB: db,
