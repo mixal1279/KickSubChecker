@@ -31,6 +31,7 @@ Odświeżanie OAuth używa SQLite Durable Object jako źródła prawdy. Przy pie
 - `0004_kv_migration_runs.sql` tworzy trwały stan migracji per kanał: fazę, cursor, liczniki i lease, z CASCADE po usunięciu kanału.
 - `0005_kv_migration_items.sql` tworzy unikalne markery idempotencji dla źródłowych kluczy KV w fazach `links` i `subscriptions`, również z CASCADE.
 - `0006_subscriptions_kick_user_id_idx.sql` dodaje indeks złożony dla zapytań subskrypcji po zweryfikowanym ID Kick i dacie wygaśnięcia.
+- `0007_webhook_processing_lease.sql` dodaje token właściciela i termin lease dla przetwarzania webhooków. Każdy batch odnawia lease, a zapisy i finalizacja wymagają aktualnego tokena; spóźniona instancja nie może zakończyć ani oznaczyć jako błędnego eventu przejętego przez nowsze żądanie.
 
 Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanych migracji — zmiany schematu wprowadzaj kolejnymi numerowanymi migracjami. Migracje należy wykonywać dokładnie raz i zapisywać ich zastosowanie w dokumentacji wdrożenia; repozytorium nie ma jeszcze automatycznego rejestru migracji.
 
@@ -57,7 +58,7 @@ Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa w
 
 ## Kolejność bezpiecznego przełączenia
 
-1. Zastosuj migracje D1 `0001` → `0002` → `0003` → `0004` → `0005` → `0006` w środowisku docelowym.
+1. Zastosuj migracje D1 `0001` → `0002` → `0003` → `0004` → `0005` → `0006` → `0007` w środowisku docelowym.
 2. Ustaw `D1_ENABLED = "false"` oraz `MIGRATION_WRITE_FREEZE = "false"`. Nie przełączaj jeszcze odczytów na D1.
 3. Uruchom `POST /api/admin/migrate-kv` (domyślnie dry-run) i sprawdź raport.
 4. Włącz `MIGRATION_WRITE_FREEZE = "true"` i wdróż tę konfigurację. Od tej chwili Worker zwraca HTTP 503 dla webhooków, callbacków OAuth, rozpoczęcia nowych linków i rejestracji eventów. Odczyty pozostają dostępne.
@@ -82,7 +83,7 @@ Rejestracja eventów przekazuje `broadcaster_user_id` do Kick i wymaga dokładni
 
 W ścieżce KV pojedynczy webhook prezentów jest ograniczony do 200 odbiorców. Każdy odbiorca może wymagać czterech operacji KV (odczyt i zapis rekordu po nicku oraz indeksu po ID); limit pozostawia zapas w limicie 1000 operacji usług wewnętrznych na wywołanie Workera. Większy payload otrzymuje HTTP 413 przed jakimkolwiek zapisem. Po przełączeniu na D1 limit wynosi 500 odbiorców; zapisy są wykonywane porcjami maksymalnie 45 odbiorców (do 90 instrukcji SQL w jednym batchu).
 
-Repozytorium D1 aktualizuje nick, datę wygaśnięcia, źródło i znacznik czasu tylko wtedy, gdy przychodzący event nie jest starszy od zapisanego rekordu. Starszy event nie cofa metadanych nowszej subskrypcji, ale może uzupełnić brakujące `kick_user_id` w historycznym rekordzie po nicku. Takie uzupełnienie nie zmienia daty wygaśnięcia, nicku ani źródła. W ścieżce KV obowiązuje ta sama zasada monotoniczności i uzupełniania brakującego ID.
+Repozytorium D1 używa 5-minutowego lease z fencing tokenem dla każdego eventu. Przy ponowieniu po wygaśnięciu lease poprzednia instancja traci prawo do zapisu, finalizacji i oznaczenia eventu jako błędnego. Lease jest odnawiany przy każdej porcji odbiorców. Repozytorium D1 aktualizuje nick, datę wygaśnięcia, źródło i znacznik czasu tylko wtedy, gdy przychodzący event nie jest starszy od zapisanego rekordu. Starszy event nie cofa metadanych nowszej subskrypcji, ale może uzupełnić brakujące `kick_user_id` w historycznym rekordzie po nicku. Takie uzupełnienie nie zmienia daty wygaśnięcia, nicku ani źródła. W ścieżce KV obowiązuje ta sama zasada monotoniczności i uzupełniania brakującego ID.
 
 ## Jednorazowość OAuth — Durable Objects
 
