@@ -110,7 +110,7 @@ function utworzKvFixture(broadcasterId, teraz) {
   for (let i = 0; i < 2; i++) {
     const discordId = String(BigInt(broadcasterId) + 100n + BigInt(i));
     const kickId = String(BigInt(broadcasterId) + 200n + BigInt(i));
-    const linkUsername = `linkuser${i}`;
+    const linkUsername = i === 0 ? subUsername : `linkuser${i}`;
     const subUsername = `subuser${i}`;
 
     dane.set(`link:discord:${discordId}`, {
@@ -246,6 +246,10 @@ test('pełny handler migracji używa KV fixture i rzeczywistej testowej D1', { s
 
     assert.equal(Number(linki.liczba), 2);
     assert.equal(Number(subskrypcje.liczba), 2);
+    const powiazanaHistorycznaSubskrypcja = await db.prepare(
+      'SELECT kick_user_id FROM subscriptions WHERE broadcaster_id = ? AND kick_username = ?',
+    ).bind(broadcasterId, 'subuser0').first();
+    assert.equal(powiazanaHistorycznaSubskrypcja.kick_user_id, String(BigInt(broadcasterId) + 200n));
     assert.equal(Number(markery.liczba), 4);
     assert.deepEqual(stan, { status: 'completed', phase: 'completed' });
     assert.equal(Number(obcyZakres.liczba), 0);
