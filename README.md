@@ -76,11 +76,12 @@ npx wrangler secret put ADMIN_API_SECRET
 Backend v2 może przejąć powiązania, subskrypcje i webhooki w D1, ale tokeny właściciela kanału nadal są przechowywane w KV pod istniejącym kluczem `ljay:tokens`. Worker potrafi odczytać tożsamość kanału z obecnego tokenu i odświeżyć go standardowym refresh tokenem. **Samo przełączenie bazy nie wymaga ponownej autoryzacji Kick.**
 
 Szczegółowa, bezpieczna procedura znajduje się w [docs/backend-v2-migration.md](docs/backend-v2-migration.md). Najważniejsze:
-- skonfiguruj binding D1 (`DB`) i zastosuj migracje `0001` → `0002` → `0003` → `0004` → `0005`;
+- skonfiguruj binding D1 (`DB`) i zastosuj migracje `0001` → `0002` → `0003` → `0004` → `0005` → `0006`;
 - instalacja obsługuje jeden kanał Kick i jeden serwer Discord;
-- pozostaw `D1_ENABLED = "false"`;
-- wykonaj dry-run endpointu `POST /api/admin/migrate-kv`;
-- sprawdź raport, w tym stare źródła `gift`, `new`, `renewal`, a następnie wykonaj import z `?dry_run=false`;
-- dopiero po porównaniu danych ustaw `D1_ENABLED = "true"`.
+- pozostaw `D1_ENABLED = "false"` i wykonaj dry-run endpointu `POST /api/admin/migrate-kv`;
+- przed importem włącz `MIGRATION_WRITE_FREEZE = "true"`, wdróż konfigurację i odczekaj co najmniej 2 minuty na zakończenie żądań in-flight;
+- podczas freeze Worker blokuje webhooki, callbacki OAuth, tworzenie nowych linków i rejestrację eventów kodem 503; Kick może ponowić webhooki;
+- wykonaj import z `?dry_run=false`, sprawdź raport, stare źródła `gift`, `new`, `renewal`, konflikty oraz statusy po nicku i ID;
+- w jednym wdrożeniu przełącz `D1_ENABLED = "true"` i `MIGRATION_WRITE_FREEZE = "false"`. Nie zdejmuj freeze przed cutoverem.
 
 Nie usuwaj KV po przełączeniu — nadal przechowuje tokeny OAuth, stan PKCE, jednorazowe linki i cache klucza publicznego. Endpoint migracyjny wymaga osobnego `ADMIN_API_SECRET`. Nie udostępniaj go botowi Discord ani nie używaj ponownie `BOT_API_SECRET`.
