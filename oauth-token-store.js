@@ -19,6 +19,13 @@ export class OAuthTokenStore extends DurableObject {
       )
     `);
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expiry ON oauth_tokens(wygasa_at)');
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_locks (
+        lock_name TEXT PRIMARY KEY,
+        reservation_id TEXT NOT NULL,
+        lease_until INTEGER NOT NULL
+      )
+    `);
   }
 
   async zapisz(token, typ, dane, wygasaAt) {
@@ -110,6 +117,37 @@ export class OAuthTokenStore extends DurableObject {
       ).toArray();
       return zmienione.length === 1;
     });
+  }
+
+  async zarezerwujBlokade(nazwa, czasRezerwacji = 30_000) {
+    if (typeof nazwa !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(nazwa)) {
+      throw new TypeError('Nieprawidłowa nazwa blokady.');
+    }
+    const teraz = Date.now();
+    if (!Number.isSafeInteger(czasRezerwacji) || czasRezerwacji < 1_000 || czasRezerwacji > 120_000) {
+      throw new TypeError('Nieprawidłowy czas blokady.');
+    }
+    const id = crypto.randomUUID();
+    const wynik = this.ctx.storage.transactionSync(() => this.sql.exec(
+      `INSERT INTO oauth_locks (lock_name, reservation_id, lease_until)
+       VALUES (?, ?, ?)
+       ON CONFLICT(lock_name) DO UPDATE SET
+         reservation_id = excluded.reservation_id,
+         lease_until = excluded.lease_until
+       WHERE oauth_locks.lease_until <= ?
+       RETURNING lock_name`,
+      nazwa, id, teraz + czasRezerwacji, teraz,
+    ).toArray());
+    return wynik.length === 1 ? id : null;
+  }
+
+  async zwolnijBlokade(nazwa, id) {
+    if (typeof nazwa !== 'string' || !/^[a-z0-9_-]{1,64}$/.test(nazwa)
+      || typeof id !== 'string' || id.length > 64) return false;
+    return this.ctx.storage.transactionSync(() => this.sql.exec(
+      'DELETE FROM oauth_locks WHERE lock_name = ? AND reservation_id = ? RETURNING lock_name',
+      nazwa, id,
+    ).toArray().length === 1);
   }
 
   #sprawdz(token, typ) {
