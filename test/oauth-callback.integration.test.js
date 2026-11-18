@@ -121,6 +121,30 @@ test('freeze blokuje /ljay-live i /ljay-live/start bez tworzenia stanu OAuth', a
   }
 });
 
+test('freeze blokuje /authorize i /callback bez zużywania tokenów OAuth', async () => {
+  const env = utworzEnv({ freeze: 'true' });
+  const linkToken = 'LinkToken_123456789012345';
+  const magazyn = env.OAUTH_TOKENS.getByName('token-S');
+  await magazyn.zapisz(linkToken, 'link-start', {
+    discord_id: '123456789012345678',
+    created_at: Date.now(),
+  }, Date.now() + 600_000);
+  await dodajState(env);
+
+  const authorize = await worker.fetch(
+    request(`/authorize?link_token=${linkToken}`), env,
+  );
+  const callback = await worker.fetch(
+    request(`/callback?code=${code}&state=${state}`), env,
+  );
+
+  assert.equal(authorize.status, 503);
+  assert.equal(callback.status, 503);
+  assert.ok(env.wpisy.has(linkToken));
+  assert.ok(env.wpisy.has(state));
+  assert.deepEqual(env.zdarzenia, []);
+});
+
 test('/ljay-live i /ljay-live/start działają bez freeze i nie żądają channel:read', async () => {
   for (const path of ['/ljay-live', '/ljay-live/start']) {
     const env = utworzEnv();
