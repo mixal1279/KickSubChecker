@@ -283,6 +283,35 @@ test('rotacja tokena wymaga aktywnej blokady i zgodnego poprzedniego refresh tok
   assert.equal(await magazyn.zapiszOdswiezoneTokeny(pierwsze, lease, 'refresh-v1'), false);
 });
 
+test('spóźniony właściciel lease nie może zapisać tokenów po przejęciu blokady', async () => {
+  const { magazyn } = utworzMagazyn();
+  const zegar = Date.now;
+  let teraz = zegar();
+  Date.now = () => teraz;
+  try {
+    const pierwsze = {
+      access_token: 'access-v1', refresh_token: 'refresh-v1', expires_at: teraz + 60_000,
+    };
+    await magazyn.zainicjujTokeny(pierwsze);
+    const staryLease = await magazyn.zarezerwujBlokade('broadcaster', 5_000);
+    assert.ok(staryLease);
+    teraz += 5_001;
+    const nowyLease = await magazyn.zarezerwujBlokade('broadcaster', 20_000);
+    assert.ok(nowyLease);
+    const spoznione = {
+      access_token: 'stale-access', refresh_token: 'stale-refresh', expires_at: teraz + 60_000,
+    };
+    const aktualne = {
+      access_token: 'fresh-access', refresh_token: 'fresh-refresh', expires_at: teraz + 120_000,
+    };
+    assert.equal(await magazyn.zapiszOdswiezoneTokeny(spoznione, staryLease, 'refresh-v1'), false);
+    assert.equal(await magazyn.zapiszOdswiezoneTokeny(aktualne, nowyLease, 'refresh-v1'), true);
+    assert.deepEqual(await magazyn.pobierzTokeny(), aktualne);
+  } finally {
+    Date.now = zegar;
+  }
+});
+
 test('zapis tokenów odrzuca nieprawidłowe dane', async () => {
   const { magazyn } = utworzMagazyn();
   await assert.rejects(magazyn.zapiszTokeny({ access_token: 'a', refresh_token: '', expires_at: 1 }), /tokenów/);
