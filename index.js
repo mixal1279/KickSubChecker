@@ -126,6 +126,12 @@ async function verifyWebhookSignature(env, headers, rawBody) {
 function repozytorium(env, wymus = false) {
   return env.DB && (wymus || env.D1_ENABLED === 'true') ? utworzRepozytoriumD1(env.DB) : null;
 }
+function zapisyZamrozone(env) {
+  return env.MIGRATION_WRITE_FREEZE === 'true' && env.D1_ENABLED !== 'true';
+}
+function odpowiedzZamrozenia() {
+  return text('Operacje zapisu są czasowo wstrzymane na czas migracji backendu. Spróbuj ponownie po zakończeniu przełączenia.', 503, { 'Retry-After': '120' });
+}
 async function pobierzBroadcasterId(env) {
   const configured = String(env.KICK_BROADCASTER_ID || '').trim();
   const stored = await env.SUBS_KV.get('config:broadcaster_id');
@@ -134,7 +140,21 @@ async function pobierzBroadcasterId(env) {
   if (stored && configured && stored !== configured) {
     throw new Error('KICK_BROADCASTER_ID nie zgadza się z autoryzowanym kanałem Kick.');
   }
-  if (stored) return stored;
+  if (stored) {
+    const repo = repozytorium(env);
+    if (repo) {
+      let username = await env.SUBS_KV.get('config:broadcaster_username');
+      if (typeof username !== 'string' || !USERNAME_RE.test(username)) {
+        const owner = await kickCurrentUser(await getBroadcasterAccessToken(env));
+        if (owner.user_id !== stored) throw new Error('Token OAuth należy do innego kanału Kick niż zapisany broadcaster ID.');
+        username = owner.username;
+        await env.SUBS_KV.put('config:broadcaster_username', username);
+      }
+      // Naprawia częściowy zapis KV→D1 po wcześniejszej awarii; operacja jest idempotentna.
+      await repo.zapiszKanal({ broadcasterId: stored, username });
+    }
+    return stored;
+  }
 
   // Przy pierwszej konfiguracji potwierdzamy ID przez autoryzowany token właściciela.
   const owner = await kickCurrentUser(await getBroadcasterAccessToken(env));
@@ -195,6 +215,7 @@ async function kickCurrentUser(accessToken, timeoutMs = 0) {
   return { username: user.username, user_id: String(user.user_id) };
 }
 async function handleAuthorize(request, env) {
+  if (zapisyZamrozone(env)) return odpowiedzZamrozenia();
   if (request.method !== 'GET') return text('Method Not Allowed', 405);
   const url = new URL(request.url); const linkToken = url.searchParams.get('link_token'); const ownerToken = url.searchParams.get('owner_token');
   let linkDiscordId = null; let ownerFlow = false;
@@ -216,6 +237,7 @@ async function handleAuthorize(request, env) {
   return Response.redirect(`${KICK_AUTHORIZE_URL}?${params}`, 302);
 }
 async function handleCallback(request, env) {
+  if (zapisyZamrozone(env)) return odpowiedzZamrozenia();
   const url = new URL(request.url);
   if (url.searchParams.has('error')) return text('Logowanie Kick zostało anulowane lub odrzucone. Uruchom autoryzację ponownie.', 400);
   const code = url.searchParams.get('code');
@@ -230,6 +252,7 @@ async function handleCallback(request, env) {
   try {
     const response = await fetch(KICK_TOKEN_URL, {
       method: 'POST',
+      signal: AbortSignal.timeout(15_000),
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         grant_type: 'authorization_code', client_id: env.KICK_CLIENT_ID,
@@ -250,7 +273,7 @@ async function handleCallback(request, env) {
   }
   if (pending.discord_id) {
     try {
-      const user = await kickCurrentUser(tokens.access_token);
+      const user = await kickCurrentUser(tokens.access_token, 10_000);
       const username = user.username.toLowerCase();
       if (!USERNAME_RE.test(username)) return text('Kick zwrócił nieobsługiwany nick. Skontaktuj się z administratorem.', 400);
       const record = { discord_id: pending.discord_id, username, kick_user_id: user.user_id, linked_at: new Date().toISOString() };
@@ -261,6 +284,9 @@ async function handleCallback(request, env) {
           await repo.polaczKonto({
             broadcasterId, discordUserId: pending.discord_id,
             kickUserId: user.user_id, kickUsername: username,
+          });
+          await repo.uzupelnijIdSubskrypcjiPoNicku({
+            broadcasterId, kickUserId: user.user_id, kickUsername: username,
           });
         } catch (error) {
           if (/UNIQUE|constraint/i.test(error.message)) return text('To konto Kick jest już połączone z innym kontem Discord na tym kanale.', 409);
@@ -309,6 +335,7 @@ async function handleCallback(request, env) {
   return text('Autoryzacja właściciela kanału zakończona. Tokeny pozostają w KV. Administrator może teraz zarejestrować webhooki.');
 }
 async function handleRegisterEvents(request, env) {
+  if (zapisyZamrozone(env)) return json({ error: 'migration_write_freeze' }, 503, { 'Retry-After': '120' });
   if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
   if (!await bearerAuthorized(request, env)) return json({ error: 'unauthorized' }, 401);
   try {
@@ -364,6 +391,7 @@ async function handleRegisterEvents(request, env) {
   }
 }
 async function handleWebhook(request, env) {
+  if (zapisyZamrozone(env)) return text('Migration write freeze', 503, { 'Retry-After': '120' });
   if (request.method !== 'POST') return text('Method Not Allowed', 405);
   const declaredLength = Number(request.headers.get('Content-Length') || 0);
   if (Number.isFinite(declaredLength) && declaredLength > 256_000) return text('Payload Too Large', 413);
@@ -503,7 +531,14 @@ async function saveSubscription(env, subscription) {
   // Nie pozwalamy starszemu eventowi cofnąć nowszej subskrypcji.
   if (!old || !Number.isFinite(Date.parse(old.expires_at)) || expiry >= Date.parse(old.expires_at)) {
     await env.SUBS_KV.put(key, JSON.stringify(record));
-    if (record.user_id) await env.SUBS_KV.put(`sub:user_id:${record.user_id}`, JSON.stringify(record));
+    if (record.user_id) {
+      const userIdKey = `sub:user_id:${record.user_id}`;
+      const oldById = await env.SUBS_KV.get(userIdKey, 'json');
+      const oldByIdExpiry = Date.parse(oldById?.expires_at || '');
+      if (!Number.isFinite(oldByIdExpiry) || expiry >= oldByIdExpiry) {
+        await env.SUBS_KV.put(userIdKey, JSON.stringify(record));
+      }
+    }
   }
 }
 
@@ -548,12 +583,14 @@ async function handleApi(request, env) {
     return json({ username: record.username || username || null, known: true, status: subscribed ? 'active' : 'inactive', subscribed, expires_at: record.expires_at });
   }
   if (url.pathname === '/api/owner/start') {
+    if (zapisyZamrozone(env)) return json({ error: 'migration_write_freeze' }, 503, { 'Retry-After': '120' });
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
     const ownerToken = randomString(32);
     await zapiszTokenJednorazowy(env, ownerToken, 'owner-start', { created_at: Date.now() });
     return json({ url: `${url.origin}/authorize?${new URLSearchParams({ owner_token: ownerToken })}` });
   }
   if (url.pathname === '/api/link/start') {
+    if (zapisyZamrozone(env)) return json({ error: 'migration_write_freeze' }, 503, { 'Retry-After': '120' });
     if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
     let body; try { body = await request.json(); } catch { return json({ error: 'invalid_json' }, 400); }
     const discordId = String(body.discord_id || '');
@@ -592,6 +629,9 @@ async function handleApi(request, env) {
     }
     const dryRun = parametryDryRun[0] !== 'false';
     const parametryPaginacji = ['links_cursor', 'subscriptions_cursor', 'links_done', 'subscriptions_done'];
+    if (!dryRun && !zapisyZamrozone(env)) {
+      return json({ error: 'migration_write_freeze_required' }, 409);
+    }
     if (!dryRun && parametryPaginacji.some((parametr) => url.searchParams.has(parametr))) {
       return json({ error: 'pagination_only_available_for_dry_run' }, 400);
     }
