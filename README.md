@@ -11,8 +11,8 @@ Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), 
 ## 1. Cloudflare Worker
 
 1. W katalogu projektu zaloguj Wrangler: `npx wrangler login`.
-2. Utwórz namespace: `npx wrangler kv namespace create SUBS_KV`.
-3. Wklej otrzymane ID do `wrangler.toml` zamiast `REPLACE_WITH_REAL_KV_NAMESPACE_ID`.
+2. **Przy kontynuowaniu istniejącej instalacji zachowaj obecny namespace `SUBS_KV` z `wrangler.toml`.** Sprawdź jego istnienie przez `npx wrangler kv namespace list`; nie twórz nowego namespace i nie podmieniaj ID, bo odetniesz Workera od istniejących subskrypcji, tokenów OAuth i stanu webhooków.
+3. Tylko przy zupełnie nowej instalacji utwórz namespace poleceniem `npx wrangler kv namespace create SUBS_KV` i wpisz otrzymane ID do `wrangler.toml`.
 4. Utwórz aplikację na https://dev.kick.com. W jej ustawieniach ustaw Redirect URI dokładnie na `https://TWOJ-WORKER.workers.dev/callback`.
 5. Ustaw `REDIRECT_URI` w `wrangler.toml` na ten sam adres i zastąp nazwę Workera/host w konfiguracji.
 6. Ustaw sekrety. `BOT_API_SECRET` musi być długim losowym sekretem, identycznym w Workerze i w `.env` bota. `ADMIN_API_SECRET` musi być innym, niezależnym sekretem i nie może trafić do konfiguracji bota:
@@ -24,7 +24,7 @@ Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), 
    npx wrangler secret put ADMIN_API_SECRET
    ```
 
-7. Przed wdrożeniem sprawdź, czy `wrangler.toml` zawiera prawdziwe ID KV oraz właściwy `REDIRECT_URI`; wartości `REPLACE_WITH_...` są tylko placeholderami.
+7. Przed wdrożeniem sprawdź, czy ID KV i D1 w `wrangler.toml` wskazują zasoby właściwego konta Cloudflare oraz czy `REDIRECT_URI` jest poprawny. Przy istniejącej instalacji nie zastępuj tych ID nowymi zasobami.
 8. Wdróż Workera: `npx wrangler deploy`.
 9. Administrator tworzy jednorazowy link OAuth właściciela kanału przez `POST https://TWOJ-WORKER.workers.dev/api/owner/start` z nagłówkiem `Authorization: Bearer TWÓJ_ADMIN_API_SECRET`, a następnie przekazuje zwrócone `url` właścicielowi kanału (np. Ljay). Użyj `ADMIN_API_SECRET`, nigdy `BOT_API_SECRET`. Link jest jednorazowy i wygasa po 10 minutach. Właściciel zatwierdza OAuth.
 
