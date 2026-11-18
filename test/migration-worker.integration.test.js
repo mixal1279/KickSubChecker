@@ -35,7 +35,26 @@ function utworzEnv({
     },
   };
 
+  let aktywnaBlokada = false;
   const env = {
+    OAUTH_TOKENS: {
+      getByName(nazwa) {
+        assert.equal(nazwa, 'refresh-owner');
+        return {
+          async zarezerwujBlokade(_klucz, czas) {
+            assert.ok(czas >= 20_000);
+            if (aktywnaBlokada) return null;
+            aktywnaBlokada = true;
+            return 'test-refresh-lease';
+          },
+          async zwolnijBlokade(_klucz, id) {
+            if (id !== 'test-refresh-lease' || !aktywnaBlokada) return false;
+            aktywnaBlokada = false;
+            return true;
+          },
+        };
+      },
+    },
     BOT_API_SECRET: sekret,
     ADMIN_API_SECRET: sekretAdmina,
     KICK_BROADCASTER_ID: broadcasterId,
