@@ -392,6 +392,28 @@ test('import migracyjny wymaga lease przed wykonaniem SQL', async () => {
   assert.equal(db.wywolania.length, 0);
 });
 
+test('utrata lease w trakcie importu przerywa zapis i zgłasza konflikt właściciela', async () => {
+  const token = 'abcdefghijklmnopqrstuvwx123456';
+  const db = utworzFakeD1({ pierwszy: { imported: -1 } });
+  const repo = utworzRepozytoriumD1(db);
+  await assert.rejects(repo.importujPowiazanieMigracja({
+    broadcasterId: '12345', sourceKey: 'link:discord:23456789012345678',
+    discordUserId: '23456789012345678', kickUserId: '34567', kickUsername: 'Nick',
+    leaseToken: token,
+  }), /Utracono lease migracji/);
+  await assert.rejects(repo.importujSubskrypcjeMigracja({
+    broadcasterId: '12345', sourceKey: 'sub:testuser',
+    kickUserId: '34567', kickUsername: 'TestUser',
+    expiresAtMs: Date.now() + 60_000, source: 'admin', leaseToken: token,
+  }), /Utracono lease migracji/);
+  assert.equal(db.wywolania.length, 2);
+  for (const call of db.wywolania) {
+    assert.equal(call.typ, 'batch');
+    assert.match(call.polecenia[0].sql, /FROM migration_runs/);
+    assert.match(call.polecenia.at(-1).sql, /ELSE -1 END AS imported/);
+  }
+});
+
 test('liczniki migracji są pobierane z trwałych markerów D1', async () => {
   const db = utworzFakeD1({ pierwszy: { links: 3, subscriptions: 7, total: 10 } });
   const repo = utworzRepozytoriumD1(db);
