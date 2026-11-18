@@ -178,7 +178,11 @@ async function blokujPowrotDoKvPoMigracji(env, pathname) {
     return env.D1_ENABLED === 'true' ? 'd1_cutover_marker_unavailable' : null;
   }
   const storedId = await env.SUBS_KV.get('config:broadcaster_id');
-  const expectedId = String(env.KICK_BROADCASTER_ID || storedId || '').trim();
+  const configuredId = String(env.KICK_BROADCASTER_ID || '').trim();
+  if (storedId && configuredId && storedId !== configuredId) {
+    return 'd1_cutover_broadcaster_mismatch';
+  }
+  const expectedId = String(configuredId || storedId || '').trim();
   if (!expectedId) {
     return env.D1_ENABLED === 'true' ? 'd1_cutover_broadcaster_unavailable' : null;
   }
@@ -210,12 +214,21 @@ async function blokujPowrotDoKvPoMigracji(env, pathname) {
 async function oznaczWymaganyBackendD1(env, broadcasterId) {
   const id = String(broadcasterId);
   const zapisanyId = await env.SUBS_KV.get('config:broadcaster_id');
-  if (zapisanyId && zapisanyId !== id) {
-    throw new Error('Zapisany broadcaster ID nie zgadza się z ukończoną migracją D1.');
+  const skonfigurowanyId = String(env.KICK_BROADCASTER_ID || '').trim();
+  if (
+    (zapisanyId && zapisanyId !== id)
+    || (skonfigurowanyId && skonfigurowanyId !== id)
+  ) throw new Error('Broadcaster ID nie zgadza się z ukończoną migracją D1.');
+  if (!zapisanyId) {
+    if (skonfigurowanyId !== id) {
+      throw new Error('Przed cutoverem skonfiguruj KICK_BROADCASTER_ID albo utrwal config:broadcaster_id.');
+    }
+    // Jeśli ID nie było wcześniej zapisane, wymagamy stałej konfiguracji środowiska,
+    // aby gate mógł znaleźć partycję DO mimo eventual consistency KV.
+    await env.SUBS_KV.put('config:broadcaster_id', id);
   }
   // Silnie spójny, monotoniczny latch zapisujemy przed pomocniczym markerem KV.
   await magazynCutoveru(env, id).oznaczCutoverD1(id);
-  if (!zapisanyId) await env.SUBS_KV.put('config:broadcaster_id', id);
   const klucz = 'config:d1_cutover_complete';
   const obecny = await env.SUBS_KV.get(klucz);
   if (obecny && obecny !== id) {
