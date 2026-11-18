@@ -1,6 +1,6 @@
 # Kick Sub Checker
 
-Projekt ma dwie osobne części: `KickSubChecker.js` to bot Discord (Node.js), a `index.js` to Cloudflare Worker. Worker przyjmuje webhooki Kick, przechowuje stan subskrypcji w KV i udostępnia chronione API botowi. Konto Kick użytkownika jest wiązane z Discordem przez OAuth — ręczne wpisanie nicku nie nadaje uprawnień.
+Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), a `index.js` to Cloudflare Worker. Worker przyjmuje webhooki Kick, przechowuje stan subskrypcji w KV i udostępnia chronione API botowi. Konto Kick użytkownika jest wiązane z Discordem przez OAuth — ręczne wpisanie nicku nie nadaje uprawnień.
 
 ## Wymagania
 - Node.js 18.17 lub nowszy i npm na hostingu bota.
