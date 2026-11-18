@@ -157,31 +157,64 @@ function sprawdzKonfiguracjeBackendu(env) {
     throw new Error('D1_ENABLED=true wymaga poprawnego bindingu DB; przełączenie na KV jest zabronione.');
   }
 }
+function magazynCutoveru(env, broadcasterId) {
+  if (typeof broadcasterId !== 'string' || !/^[0-9]{1,32}$/.test(broadcasterId)) {
+    throw new Error('Nieprawidłowy broadcaster ID dla latcha cutoveru.');
+  }
+  if (!env.OAUTH_TOKENS || typeof env.OAUTH_TOKENS.getByName !== 'function') {
+    throw new Error('Brak bindingu Durable Object wymaganego do weryfikacji cutoveru.');
+  }
+  const magazyn = env.OAUTH_TOKENS.getByName(`cutover-${broadcasterId}`);
+  if (
+    typeof magazyn.pobierzStanCutoveru !== 'function'
+    || typeof magazyn.oznaczCutoverD1 !== 'function'
+  ) throw new Error('Durable Object nie obsługuje latcha cutoveru. Wdróż nową wersję Workera.');
+  return magazyn;
+}
+
 async function blokujPowrotDoKvPoMigracji(env, pathname) {
   if (['/', '/preview', '/api/admin/migrate-kv'].includes(pathname)) return null;
   if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') {
-    return env.D1_ENABLED === 'true' ? 'd1_cutover_marker_unavailable' : null;
-  }
-  const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
-  if (marker == null) {
-    return env.D1_ENABLED === 'true' ? 'd1_cutover_requires_completed_migration' : null;
+    return 'd1_cutover_marker_unavailable';
   }
   const storedId = await env.SUBS_KV.get('config:broadcaster_id');
   const expectedId = String(env.KICK_BROADCASTER_ID || storedId || '').trim();
-  if (
-    !/^[0-9]{1,32}$/.test(String(marker))
-    || !/^[0-9]{1,32}$/.test(expectedId)
-    || String(marker) !== expectedId
-  ) return 'd1_cutover_broadcaster_mismatch';
-  // Po zakończonym imporcie KV jest już tylko kopią historyczną.
-  return env.D1_ENABLED === 'true' ? null : 'd1_cutover_requires_d1_backend';
+  if (!expectedId) {
+    return env.D1_ENABLED === 'true' ? 'd1_cutover_broadcaster_unavailable' : null;
+  }
+  if (!/^[0-9]{1,32}$/.test(expectedId)) return 'd1_cutover_broadcaster_mismatch';
+
+  let backend;
+  try {
+    backend = await magazynCutoveru(env, expectedId).pobierzStanCutoveru(expectedId);
+  } catch (error) {
+    console.error('Odczyt latcha cutoveru nie powiódł się:', error.message);
+    return 'd1_cutover_latch_unavailable';
+  }
+
+  if (backend === 'd1') {
+    return env.D1_ENABLED === 'true' ? null : 'd1_cutover_requires_d1_backend';
+  }
+  if (backend !== null) return 'd1_cutover_latch_invalid';
+
+  // Marker KV może wykryć stary cutover wymagający jednorazowej promocji do DO,
+  // ale nigdy samodzielnie nie autoryzuje przełączenia na D1.
+  const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
+  if (marker != null) {
+    if (String(marker) !== expectedId) return 'd1_cutover_broadcaster_mismatch';
+    return 'd1_cutover_latch_repair_required';
+  }
+  return env.D1_ENABLED === 'true' ? 'd1_cutover_requires_completed_migration' : null;
 }
+
 async function oznaczWymaganyBackendD1(env, broadcasterId) {
   const id = String(broadcasterId);
   const zapisanyId = await env.SUBS_KV.get('config:broadcaster_id');
   if (zapisanyId && zapisanyId !== id) {
     throw new Error('Zapisany broadcaster ID nie zgadza się z ukończoną migracją D1.');
   }
+  // Silnie spójny, monotoniczny latch zapisujemy przed pomocniczym markerem KV.
+  await magazynCutoveru(env, id).oznaczCutoverD1(id);
   if (!zapisanyId) await env.SUBS_KV.put('config:broadcaster_id', id);
   const klucz = 'config:d1_cutover_complete';
   const obecny = await env.SUBS_KV.get(klucz);
