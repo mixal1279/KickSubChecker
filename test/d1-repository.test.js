@@ -356,7 +356,8 @@ test('import subskrypcji z KV zapisuje marker i rekord w jednej paczce', async (
   assert.match(batch.polecenia[1].sql, /lease_token = \\?/);
   assert.match(batch.polecenia[1].sql, /lease_expires_at_ms >/);
   assert.match(batch.polecenia[1].sql, /ON CONFLICT\(broadcaster_id, subscriber_key\) DO UPDATE/);
-  assert.match(batch.polecenia[2].sql, /SELECT 1 AS imported FROM migration_items/);
+  assert.match(batch.polecenia[2].sql, /SELECT CASE WHEN EXISTS/);
+  assert.match(batch.polecenia[2].sql, /ELSE -1 END AS imported/);
   assert.equal(db.wywolania.length, 1, 'Odczyt markera musi być częścią tego samego batcha.');
 });
 
