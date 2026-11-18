@@ -5,7 +5,7 @@ const base = process.env.WORKER_URL?.trim().replace(/\/+$/, '');
 const secret = process.env.ADMIN_API_SECRET;
 
 if (!base || !secret) {
-  console.error('Brak WORKER_URL lub ADMIN_API_SECRET w .env');
+  console.error('Brak WORKER_URL lub ADMIN_API_SECRET w środowisku');
   process.exit(1);
 }
 
