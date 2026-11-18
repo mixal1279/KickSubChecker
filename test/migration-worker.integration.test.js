@@ -136,7 +136,7 @@ function utworzEnv({
     },
   };
 
-  return { env, dane, zapisyKv, wywolaniaD1, pobierzTokenyWlasciciela: () => tokenyWlasciciela, ustawStanCutoveru: (stan) => { stanCutoveru = stan; }, ustawGlobalnyStanCutoveru: (stan) => { stanGlobalnyCutoveru = stan; } };
+  return { env, dane, zapisyKv, wywolaniaD1, pobierzTokenyWlasciciela: () => tokenyWlasciciela, ustawStanCutoveru: (stan) => { stanCutoveru = stan; stanGlobalnyCutoveru = stan ? { ...stan } : null; }, ustawGlobalnyStanCutoveru: (stan) => { stanGlobalnyCutoveru = stan; } };
 }
 
 function utworzRequest() {
@@ -200,6 +200,7 @@ test('Worker wykrywa zmianę KICK_BROADCASTER_ID nawet gdy KV chwilowo nie zwrac
 test('Worker blokuje ruch przy osieroconym latchu kanału bez rejestru instalacji', async () => {
   const { env, ustawStanCutoveru } = utworzEnv();
   ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
+  ustawGlobalnyStanCutoveru(null);
   const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
   assert.equal(response.status, 503);
   assert.equal((await response.json()).error, 'd1_cutover_registry_repair_required');
