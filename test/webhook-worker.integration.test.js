@@ -168,3 +168,21 @@ test('starszy webhook nie cofa indeksu subskrypcji po Kick user ID', async () =>
   assert.equal(JSON.parse(indeks.wartosc).username, 'NewName');
   assert.equal(JSON.parse(indeks.wartosc).expires_at, nowszeWygasniecie);
 });
+
+test('KV webhook odrzuca prezent zbyt duży dla budżetu operacji przed zapisami', async () => {
+  const env = utworzEnv();
+  const giftees = Array.from({ length: 201 }, (_, i) => ({
+    user_id: String(900000000 + i),
+    username: `GiftUser${i}`,
+  }));
+  const response = await worker.fetch(await utworzZadanie(env, {
+    eventId: '01TESTEVENT0000000000000004',
+    payload: {
+      broadcaster: { user_id: broadcasterId, username: 'testchannel' },
+      giftees,
+      expires_at: new Date(Date.now() + 30 * 86400_000).toISOString(),
+    },
+  }), env);
+  assert.equal(response.status, 413);
+  assert.equal(env.zapisy.length, 0);
+});
