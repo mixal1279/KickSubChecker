@@ -330,7 +330,7 @@ test('dry-run paginuje KV bez przekraczania budżetu subrequests i bez zapisów'
 
 
 test('import wygasłego OAuth odświeża token z timeoutem i nie przechodzi dalej po awarii D1', async () => {
-  const { env, zapisyKv, wywolaniaD1 } = utworzEnv({ tokenWazny: false });
+  const { env, zapisyKv, wywolaniaD1, pobierzTokenyWlasciciela } = utworzEnv({ tokenWazny: false });
   const poprzedniFetch = globalThis.fetch;
   const wywolania = [];
   globalThis.fetch = async (url, options = {}) => {
