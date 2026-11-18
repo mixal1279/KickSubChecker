@@ -202,7 +202,7 @@ async function saveTokens(env, tokens, opcje = {}) {
     expires_at: Date.now() + expiresIn * 1000,
   };
   if (opcje.idBlokady) {
-    const zapisano = await magazyn.zapiszOdświeżoneTokeny(
+    const zapisano = await magazyn.zapiszOdswiezoneTokeny(
       dane, opcje.idBlokady, opcje.poprzedniRefreshToken,
     );
     if (!zapisano) throw new Error('Odrzucono zapis tokenów: blokada wygasła lub refresh token został już zmieniony.');
