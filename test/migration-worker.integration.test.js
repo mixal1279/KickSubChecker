@@ -154,6 +154,14 @@ test('Worker blokuje powrót do KV po aktywacji latcha D1', async () => {
   assert.equal((await response.json()).error, 'd1_cutover_requires_d1_backend');
 });
 
+test('stary marker KV bez latcha DO wymaga autoryzowanej naprawy', async () => {
+  const { env, dane } = utworzEnv();
+  dane.set('config:d1_cutover_complete', broadcasterId);
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_latch_repair_required');
+});
+
 test('Worker blokuje D1 bez aktywnego latcha', async () => {
   const { env } = utworzEnv();
   env.D1_ENABLED = 'true';
