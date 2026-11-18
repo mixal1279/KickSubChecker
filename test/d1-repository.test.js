@@ -453,3 +453,37 @@ test('atomowe przejęcie migracji odrzuca nieprawidłowy nick i nie wykonuje SQL
   }), /nick Kick/);
   assert.equal(db.wywolania.length, 0);
 });
+
+test('webhook nie cofa nicku ani źródła po starszym evencie', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await repo.zakonczWebhook({
+    broadcasterId: '12345',
+    eventId: 'event-metadata-1',
+    subscriptions: [{
+      kickUserId: '34567',
+      kickUsername: 'OldName',
+      expiresAtMs: Date.now() + 60_000,
+      source: 'channel.subscription.renewal',
+    }],
+  });
+  const batch = db.wywolania.find((x) => x.typ === 'batch');
+  const sql = batch.polecenia[0].sql;
+  assert.match(sql, /WHEN excluded\.expires_at_ms >= subscriptions\.expires_at_ms/);
+  assert.match(sql, /THEN excluded\.kick_username ELSE subscriptions\.kick_username/);
+  assert.match(sql, /THEN excluded\.source ELSE subscriptions\.source/);
+});
+
+test('zweryfikowane powiązanie uzupełnia ID historycznej subskrypcji po nicku', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await repo.uzupelnijIdSubskrypcjiPoNicku({
+    broadcasterId: '12345',
+    kickUserId: '34567',
+    kickUsername: 'OldName',
+  });
+  const call = db.wywolania.find((x) => x.typ === 'run');
+  assert.match(call.sql, /UPDATE subscriptions/);
+  assert.match(call.sql, /kick_user_id IS NULL/);
+  assert.deepEqual(call.args, ['34567', '12345', 'OldName']);
+});
