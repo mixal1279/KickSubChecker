@@ -384,9 +384,9 @@ test('import wygasłego OAuth odświeża token z timeoutem i nie przechodzi dale
 
 
 test('refresh OAuth bez nowego refresh_token nie nadpisuje trwałych tokenów', async () => {
-  const { env, pobierzTokenyWlasciciela } = utworzEnv({ tokenWazny: false });
+  const { env, dane, pobierzTokenyWlasciciela } = utworzEnv({ tokenWazny: false });
   const poprzedniFetch = globalThis.fetch;
-  const poprzednieTokeny = pobierzTokenyWlasciciela();
+  const poprzednieTokeny = dane.get('ljay:tokens');
   const wywolania = [];
 
   globalThis.fetch = async (url) => {
