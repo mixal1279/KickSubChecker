@@ -177,16 +177,17 @@ async function blokujPowrotDoKvPoMigracji(env, pathname) {
   if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') {
     return env.D1_ENABLED === 'true' ? 'd1_cutover_marker_unavailable' : null;
   }
-  const storedId = await env.SUBS_KV.get('config:broadcaster_id');
+  // ID środowiska jest silnie spójnym kluczem partycji DO.
+  // KV nie może być źródłem ID, bo jego odczyt może być chwilowo nieaktualny.
   const configuredId = String(env.KICK_BROADCASTER_ID || '').trim();
-  if (storedId && configuredId && storedId !== configuredId) {
+  if (!/^[0-9]{1,32}$/.test(configuredId)) {
+    return 'd1_cutover_broadcaster_unavailable';
+  }
+  const storedId = await env.SUBS_KV.get('config:broadcaster_id');
+  if (storedId && storedId !== configuredId) {
     return 'd1_cutover_broadcaster_mismatch';
   }
-  const expectedId = String(configuredId || storedId || '').trim();
-  if (!expectedId) {
-    return env.D1_ENABLED === 'true' ? 'd1_cutover_broadcaster_unavailable' : null;
-  }
-  if (!/^[0-9]{1,32}$/.test(expectedId)) return 'd1_cutover_broadcaster_mismatch';
+  const expectedId = configuredId;
 
   let backend;
   try {
