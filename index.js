@@ -93,7 +93,7 @@ async function parseJsonResponse(response, label) {
 async function fetchKickPublicKey(env) {
   const cached = await env.SUBS_KV.get('kick:public_key');
   if (cached) return cached;
-  const response = await fetch(KICK_PUBLIC_KEY_URL);
+  const response = await fetch(KICK_PUBLIC_KEY_URL, { signal: AbortSignal.timeout(10_000) });
   const data = await parseJsonResponse(response, 'Pobieranie klucza publicznego Kick');
   const pem = data.public_key || data.data?.public_key;
   if (typeof pem !== 'string' || !pem.includes('BEGIN PUBLIC KEY')) throw new Error('Kick API nie zwróciło poprawnego klucza publicznego.');
@@ -185,7 +185,7 @@ async function saveTokens(env, tokens) {
     expires_at: Date.now() + expiresIn * 1000,
   }));
 }
-async function getBroadcasterAccessToken(env, timeoutMs = 0) {
+async function getBroadcasterAccessToken(env, timeoutMs = 10_000) {
   const raw = await env.SUBS_KV.get('ljay:tokens', 'json');
   if (!raw) throw new Error('Brak tokenów właściciela kanału. Administrator musi wygenerować link przez /api/owner/start.');
   if (Date.now() < raw.expires_at - 60_000) return raw.access_token;
@@ -202,7 +202,7 @@ async function getBroadcasterAccessToken(env, timeoutMs = 0) {
   const tokens = await parseJsonResponse(response, 'Odświeżanie tokenu Kick');
   await saveTokens(env, tokens); return tokens.access_token;
 }
-async function kickCurrentUser(accessToken, timeoutMs = 0) {
+async function kickCurrentUser(accessToken, timeoutMs = 10_000) {
   const opcje = { headers: { Authorization: `Bearer ${accessToken}` } };
   if (timeoutMs > 0) opcje.signal = AbortSignal.timeout(timeoutMs);
   const response = await fetch(KICK_USERS_URL, opcje);
@@ -347,6 +347,7 @@ async function handleRegisterEvents(request, env) {
     const accessToken = await getBroadcasterAccessToken(env);
     const response = await fetch(KICK_EVENTS_URL, {
       method: 'POST',
+      signal: AbortSignal.timeout(15_000),
       headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         broadcaster_user_id: broadcasterNumber,
