@@ -5,11 +5,38 @@ import worker from '../index.js';
 
 const workerUrl = 'https://worker.test/api/admin/migrate-kv';
 
+function utworzEnv(overrides = {}) {
+  return {
+    KICK_BROADCASTER_ID: '123456789',
+    SUBS_KV: {
+      async get(key) { return key === 'config:broadcaster_id' ? '123456789' : null; },
+    },
+    OAUTH_TOKENS: {
+      getByName(nazwa) {
+        if (nazwa === 'cutover-registry') {
+          return {
+            async pobierzGlobalnyStanCutoveru() { return null; },
+            async oznaczGlobalnyCutoverD1() { return true; },
+          };
+        }
+        if (nazwa.startsWith('cutover-')) {
+          return {
+            async pobierzStanCutoveru() { return null; },
+            async oznaczCutoverD1() { return true; },
+          };
+        }
+        return {};
+      },
+    },
+    ...overrides,
+  };
+}
+
 test('sekret bota nie autoryzuje migracji administracyjnej', async () => {
   const response = await worker.fetch(new Request(workerUrl, {
     method: 'POST',
     headers: { Authorization: 'Bearer bot-secret' },
-  }), { BOT_API_SECRET: 'bot-secret' });
+  }), utworzEnv({ BOT_API_SECRET: 'bot-secret' }));
 
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: 'unauthorized' });
@@ -19,7 +46,7 @@ test('migracja wymaga osobnego ADMIN_API_SECRET', async () => {
   const response = await worker.fetch(new Request(workerUrl, {
     method: 'POST',
     headers: { Authorization: 'Bearer admin-secret' },
-  }), { ADMIN_API_SECRET: 'admin-secret' });
+  }), utworzEnv({ ADMIN_API_SECRET: 'admin-secret' }));
 
   // Autoryzacja przechodzi; brak bindingu D1 zatrzymuje żądanie przed jakimkolwiek zapisem.
   assert.equal(response.status, 503);
@@ -29,7 +56,7 @@ test('migracja wymaga osobnego ADMIN_API_SECRET', async () => {
 test('sekret administracyjny nie daje dostępu do zwykłego API bota', async () => {
   const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser', {
     headers: { Authorization: 'Bearer admin-secret' },
-  }), { ADMIN_API_SECRET: 'admin-secret' });
+  }), utworzEnv({ ADMIN_API_SECRET: 'admin-secret' }));
 
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: 'unauthorized' });
@@ -51,7 +78,7 @@ test('sekret bota nie pozwala tworzyć administracyjnych linków OAuth właścic
   const response = await worker.fetch(new Request('https://worker.test/api/owner/start', {
     method: 'POST',
     headers: { Authorization: 'Bearer bot-secret' },
-  }), { BOT_API_SECRET: 'bot-secret' });
+  }), utworzEnv({ BOT_API_SECRET: 'bot-secret' }));
 
   assert.equal(response.status, 401);
   assert.deepEqual(await response.json(), { error: 'unauthorized' });
