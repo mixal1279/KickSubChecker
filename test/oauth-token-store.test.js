@@ -7,11 +7,15 @@ function utworzMagazyn() {
   const dane = new Map();
   const blokady = new Map();
   let tokenyWlasciciela = null;
+  let tabelaTokenowUtworzona = false;
   let alarm = null;
   const sql = {
     exec(tekst, ...args) {
       const q = tekst.replace(/\\s+/g, ' ').trim().toUpperCase();
-      if (q.startsWith('CREATE TABLE') || q.startsWith('CREATE INDEX')) return { toArray: () => [] };
+      if (q.startsWith('CREATE TABLE') || q.startsWith('CREATE INDEX')) {
+        if (q.includes('OAUTH_CREDENTIALS')) tabelaTokenowUtworzona = true;
+        return { toArray: () => [] };
+      }
       if (q.startsWith('SELECT ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT FROM OAUTH_CREDENTIALS')) {
         return { toArray: () => tokenyWlasciciela ? [{ ...tokenyWlasciciela }] : [] };
       }
@@ -116,10 +120,15 @@ function utworzMagazyn() {
     },
   };
   const magazyn = new OAuthTokenStore(ctx, {});
-  return { magazyn, dane, pobierzAlarm: () => alarm };
+  return { magazyn, dane, pobierzAlarm: () => alarm, czyTabelaTokenow: () => tabelaTokenowUtworzona };
 }
 
 const token = 'AbCdEfGhIjKlMnOpQrStUvWx';
+
+test('konstruktor tworzy tabelę trwałych tokenów właściciela', () => {
+  const { czyTabelaTokenow } = utworzMagazyn();
+  assert.equal(czyTabelaTokenow(), true);
+});
 
 test('token można zużyć dokładnie jeden raz', async () => {
   const { magazyn } = utworzMagazyn();
