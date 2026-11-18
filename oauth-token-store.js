@@ -224,6 +224,42 @@ export class OAuthTokenStore extends DurableObject {
     ).toArray().length === 1);
   }
 
+  async pobierzStanCutoveru(broadcasterId) {
+    if (typeof broadcasterId !== 'string' || !/^[0-9]{1,32}$/.test(broadcasterId)) {
+      throw new TypeError('Nieprawidłowy broadcaster ID dla latcha cutoveru.');
+    }
+    const wpis = this.sql.exec(
+      'SELECT broadcaster_id, backend FROM cutover_state WHERE id = 1',
+    ).toArray()[0];
+    if (!wpis) return null;
+    if (wpis.broadcaster_id !== broadcasterId) {
+      throw new Error('Durable Object cutoveru jest przypisany do innego kanału Kick.');
+    }
+    return wpis.backend;
+  }
+
+  async oznaczCutoverD1(broadcasterId) {
+    if (typeof broadcasterId !== 'string' || !/^[0-9]{1,32}$/.test(broadcasterId)) {
+      throw new TypeError('Nieprawidłowy broadcaster ID dla latcha cutoveru.');
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const obecny = this.sql.exec(
+        'SELECT broadcaster_id, backend FROM cutover_state WHERE id = 1',
+      ).toArray()[0];
+      if (obecny && obecny.broadcaster_id !== broadcasterId) {
+        throw new Error('Nie można zmienić broadcaster ID przypisanego do latcha cutoveru.');
+      }
+      if (obecny?.backend === 'd1') return true;
+      this.sql.exec(
+        `INSERT INTO cutover_state (id, broadcaster_id, backend)
+         VALUES (1, ?, 'd1')
+         ON CONFLICT(id) DO UPDATE SET backend = 'd1'`,
+        broadcasterId,
+      );
+      return true;
+    });
+  }
+
   #sprawdz(token, typ) {
     if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(token)) {
       throw new TypeError('Nieprawidłowy token jednorazowy.');
