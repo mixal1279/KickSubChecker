@@ -175,7 +175,7 @@ function magazynCutoveru(env, broadcasterId) {
 async function blokujPowrotDoKvPoMigracji(env, pathname) {
   if (['/', '/preview', '/api/admin/migrate-kv'].includes(pathname)) return null;
   if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') {
-    return 'd1_cutover_marker_unavailable';
+    return env.D1_ENABLED === 'true' ? 'd1_cutover_marker_unavailable' : null;
   }
   const storedId = await env.SUBS_KV.get('config:broadcaster_id');
   const expectedId = String(env.KICK_BROADCASTER_ID || storedId || '').trim();
