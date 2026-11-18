@@ -80,6 +80,8 @@ Worker przed zapisem zdarzenia sprawdza:
 
 Rejestracja eventów przekazuje `broadcaster_user_id` do Kick i wymaga dokładnie trzech poprawnych odpowiedzi z `name`, `version` oraz `subscription_id`. Identyfikatory subskrypcji są zapisywane w KV. Webhook musi zawierać `Kick-Event-Subscription-Id` zgodny z identyfikatorem zarejestrowanym dla danego typu eventu. To dodatkowo wiąże dostawę z subskrypcją tej aplikacji, ponieważ Kick nie obejmuje tego nagłówka podpisem. Po wdrożeniu tej zmiany administrator musi ponownie wykonać `POST /register-events`; do tego czasu dotychczasowe webhooki będą odrzucane. Samo HTTP 200 nie jest dowodem, że wszystkie subskrypcje zostały utworzone.
 
+W ścieżce KV pojedynczy webhook prezentów jest ograniczony do 200 odbiorców. Każdy odbiorca może wymagać czterech operacji KV (odczyt i zapis rekordu po nicku oraz indeksu po ID); limit pozostawia zapas w limicie 1000 operacji usług wewnętrznych na wywołanie Workera. Większy payload otrzymuje HTTP 413 przed jakimkolwiek zapisem. Po przełączeniu na D1 limit wynosi 500 odbiorców, a zapisy są wykonywane porcjami.
+
 Repozytorium D1 aktualizuje nick, ID, źródło i znacznik czasu subskrypcji tylko wtedy, gdy przychodzący event nie jest starszy od zapisanego rekordu. Starszy event nie może cofnąć metadanych nowszej subskrypcji.
 
 ## Jednorazowość OAuth — Durable Objects
