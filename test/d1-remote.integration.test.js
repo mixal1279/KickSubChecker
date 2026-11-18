@@ -80,6 +80,21 @@ async function sprawdzBazeTestowa() {
   );
 }
 
+async function zapewnijMigracjeWebhookLease() {
+  const kolumny = await zapytaj('PRAGMA table_info(webhook_events)');
+  const nazwy = new Set((kolumny.results || []).map((wiersz) => wiersz.name));
+  if (!nazwy.has('lease_token')) {
+    await zapytaj('ALTER TABLE webhook_events ADD COLUMN lease_token TEXT');
+  }
+  if (!nazwy.has('lease_expires_at_ms')) {
+    await zapytaj('ALTER TABLE webhook_events ADD COLUMN lease_expires_at_ms INTEGER');
+  }
+  const poMigracji = await zapytaj('PRAGMA table_info(webhook_events)');
+  const aktualne = new Set((poMigracji.results || []).map((wiersz) => wiersz.name));
+  assert.ok(aktualne.has('lease_token'));
+  assert.ok(aktualne.has('lease_expires_at_ms'));
+}
+
 function noweId() {
   return (BigInt(Date.now()) * 1_000_000n
     + BigInt(Math.floor(Math.random() * 1_000_000))).toString();
@@ -89,6 +104,8 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
   skip: !skonfigurowano && 'Ustaw CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_API_TOKEN i D1_TEST_DATABASE_ID.',
 }, async () => {
   await sprawdzBazeTestowa();
+  // Migracja jest stosowana wyłącznie do zweryfikowanej bazy testowej.
+  await zapewnijMigracjeWebhookLease();
 
   const indeksId = await zapytaj(
     "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
