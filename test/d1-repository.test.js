@@ -440,7 +440,7 @@ test('kanał jest przygotowywany i lease przejmowany atomowo', async () => {
   }), true);
   const batch = db.wywolania.find((x) => x.typ === 'batch');
   assert.ok(batch);
-  assert.equal(batch.polecenia.length, 3);
+  assert.equal(batch.polecenia.length, 2);
   assert.match(batch.polecenia[0].sql, /INSERT INTO channels/);
   assert.match(batch.polecenia[0].sql, /NOT EXISTS/);
   assert.match(batch.polecenia[0].sql, /lease_expires_at_ms > \?/);
@@ -474,10 +474,12 @@ test('webhook nie cofa nicku ani źródła po starszym evencie', async () => {
     }],
   });
   const batch = db.wywolania.find((x) => x.typ === 'batch');
-  assert.equal(batch.polecenia.length, 2);
-  assert.match(batch.polecenia[0].sql, /UPDATE subscriptions SET kick_user_id/);
-  assert.match(batch.polecenia[0].sql, /status = 'processing'/);
-  const sql = batch.polecenia[1].sql;
+  assert.equal(batch.polecenia.length, 3);
+  assert.match(batch.polecenia[0].sql, /UPDATE webhook_events SET lease_expires_at_ms/);
+  assert.match(batch.polecenia[1].sql, /UPDATE subscriptions SET kick_user_id/);
+  assert.match(batch.polecenia[1].sql, /status = 'processing'/);
+  assert.match(batch.polecenia[1].sql, /lease_token = \?/);
+  const sql = batch.polecenia[2].sql;
   assert.match(sql, /WHEN excluded\.expires_at_ms >= subscriptions\.expires_at_ms/);
   assert.match(sql, /THEN excluded\.kick_username ELSE subscriptions\.kick_username/);
   assert.match(sql, /THEN excluded\.source ELSE subscriptions\.source/);
