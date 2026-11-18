@@ -172,6 +172,18 @@ function magazynCutoveru(env, broadcasterId) {
   return magazyn;
 }
 
+function rejestrCutoveru(env) {
+  if (!env.OAUTH_TOKENS || typeof env.OAUTH_TOKENS.getByName !== 'function') {
+    throw new Error('Brak bindingu Durable Object wymaganego do weryfikacji rejestru cutoveru.');
+  }
+  const rejestr = env.OAUTH_TOKENS.getByName('cutover-registry');
+  if (
+    typeof rejestr.pobierzGlobalnyStanCutoveru !== 'function'
+    || typeof rejestr.oznaczGlobalnyCutoverD1 !== 'function'
+  ) throw new Error('Durable Object nie obsługuje rejestru cutoveru. Wdróż nową wersję Workera.');
+  return rejestr;
+}
+
 async function blokujPowrotDoKvPoMigracji(env, pathname) {
   if (['/', '/preview', '/api/admin/migrate-kv'].includes(pathname)) return null;
   if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') {
@@ -187,26 +199,38 @@ async function blokujPowrotDoKvPoMigracji(env, pathname) {
   if (storedId && storedId !== configuredId) {
     return 'd1_cutover_broadcaster_mismatch';
   }
-  const expectedId = configuredId;
 
-  let backend;
+  let rejestr;
+  let stanGlobalny;
+  let backendKanalu;
   try {
-    backend = await magazynCutoveru(env, expectedId).pobierzStanCutoveru(expectedId);
+    rejestr = rejestrCutoveru(env);
+    stanGlobalny = await rejestr.pobierzGlobalnyStanCutoveru();
+    if (stanGlobalny && stanGlobalny.broadcaster_id !== configuredId) {
+      return 'd1_cutover_broadcaster_mismatch';
+    }
+    if (stanGlobalny && stanGlobalny.backend !== 'd1') {
+      return 'd1_cutover_registry_invalid';
+    }
+    backendKanalu = await magazynCutoveru(env, configuredId).pobierzStanCutoveru(configuredId);
   } catch (error) {
-    console.error('Odczyt latcha cutoveru nie powiódł się:', error.message);
+    console.error('Odczyt rejestru/latcha cutoveru nie powiódł się:', error.message);
     return 'd1_cutover_latch_unavailable';
   }
 
-  if (backend === 'd1') {
+  if (stanGlobalny?.backend === 'd1') {
+    if (backendKanalu !== 'd1') return 'd1_cutover_channel_latch_incomplete';
     return env.D1_ENABLED === 'true' ? null : 'd1_cutover_requires_d1_backend';
   }
-  if (backend !== null) return 'd1_cutover_latch_invalid';
+  if (stanGlobalny !== null && stanGlobalny !== undefined) return 'd1_cutover_registry_invalid';
+  if (backendKanalu === 'd1') return 'd1_cutover_registry_repair_required';
+  if (backendKanalu !== null) return 'd1_cutover_latch_invalid';
 
   // Marker KV może wykryć stary cutover wymagający jednorazowej promocji do DO,
   // ale nigdy samodzielnie nie autoryzuje przełączenia na D1.
   const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
   if (marker != null) {
-    if (String(marker) !== expectedId) return 'd1_cutover_broadcaster_mismatch';
+    if (String(marker) !== configuredId) return 'd1_cutover_broadcaster_mismatch';
     return 'd1_cutover_latch_repair_required';
   }
   return env.D1_ENABLED === 'true' ? 'd1_cutover_requires_completed_migration' : null;
@@ -228,8 +252,10 @@ async function oznaczWymaganyBackendD1(env, broadcasterId) {
     // aby gate mógł znaleźć partycję DO mimo eventual consistency KV.
     await env.SUBS_KV.put('config:broadcaster_id', id);
   }
-  // Silnie spójny, monotoniczny latch zapisujemy przed pomocniczym markerem KV.
+  // Najpierw latch kanału, potem nieodwracalny rejestr instalacji.
+  // Jeśli drugi zapis zawiedzie, gate wykryje osierocony latch i zablokuje ruch.
   await magazynCutoveru(env, id).oznaczCutoverD1(id);
+  await rejestrCutoveru(env).oznaczGlobalnyCutoverD1(id);
   const klucz = 'config:d1_cutover_complete';
   const obecny = await env.SUBS_KV.get(klucz);
   if (obecny && obecny !== id) {
