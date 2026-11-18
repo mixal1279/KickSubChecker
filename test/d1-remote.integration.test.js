@@ -190,6 +190,34 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
     assert.equal(event.meta?.changes, 1);
     assert.equal(duplicate.meta?.changes, 0);
 
+    const leaseEventId = 'integration-lease-event';
+    await zapytaj(
+      "INSERT INTO webhook_events (broadcaster_id, event_id, event_type, status, received_at_ms, lease_token, lease_expires_at_ms) VALUES (?, ?, ?, 'processing', ?, ?, ?)",
+      [broadcasterId, leaseEventId, 'channel.subscription.new', teraz, 'old-lease-token', teraz - 1],
+    );
+    const przejecieLease = await zapytaj(
+      `UPDATE webhook_events
+       SET lease_token = ?, lease_expires_at_ms = ?
+       WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
+         AND lease_expires_at_ms <= ?`,
+      ['new-lease-token', teraz + 300_000, broadcasterId, leaseEventId, teraz],
+    );
+    assert.equal(przejecieLease.meta?.changes, 1);
+    const finalizacjaStarego = await zapytaj(
+      `UPDATE webhook_events SET status = 'processed'
+       WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
+         AND lease_token = ? AND lease_expires_at_ms > ?`,
+      [broadcasterId, leaseEventId, 'old-lease-token', teraz],
+    );
+    assert.equal(finalizacjaStarego.meta?.changes, 0, 'Stary właściciel lease nie może sfinalizować eventu.');
+    const finalizacjaNowego = await zapytaj(
+      `UPDATE webhook_events SET status = 'processed', lease_token = NULL, lease_expires_at_ms = NULL
+       WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
+         AND lease_token = ? AND lease_expires_at_ms > ?`,
+      [broadcasterId, leaseEventId, 'new-lease-token', teraz],
+    );
+    assert.equal(finalizacjaNowego.meta?.changes, 1);
+
     await zapytaj(
       'INSERT INTO audit_log (broadcaster_id, actor_type, actor_id, action, metadata_json, created_at_ms) VALUES (?, ?, ?, ?, ?, ?)',
       [broadcasterId, 'system', 'integration-test', 'integration.test', '{}', teraz],
