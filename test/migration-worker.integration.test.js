@@ -329,7 +329,8 @@ test('import wygasłego OAuth odświeża token z timeoutem i nie przechodzi dale
     ]);
     assert.equal(zapisyKv.length, 1);
     assert.equal(zapisyKv[0].operacja, 'put');
-    assert.equal(wywolaniaD1[0].typ, 'batch');
+    assert.equal(wywolaniaD1.length, 1);
+    assert.equal(wywolaniaD1[0].typ, 'prepare');
   } finally {
     globalThis.fetch = poprzedniFetch;
   }
