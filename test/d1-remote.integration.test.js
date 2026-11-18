@@ -97,7 +97,7 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
   assert.equal(indeksId.results?.length, 1, 'Migracja 0006 musi utworzyć indeks wyszukiwania subskrypcji po Kick User ID.');
   assert.match(
     indeksId.results[0].sql,
-    /ON subscriptions\\s*\\(broadcaster_id,\\s*kick_user_id,\\s*expires_at_ms DESC\\)\\s*WHERE kick_user_id IS NOT NULL/i,
+    /ON subscriptions\s*\(broadcaster_id,\s*kick_user_id,\s*expires_at_ms DESC\)\s*WHERE kick_user_id IS NOT NULL/i,
   );
 
   const broadcasterId = noweId();
