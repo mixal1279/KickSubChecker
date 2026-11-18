@@ -22,7 +22,6 @@ function utworzEnv({
     expires_at: tokenWazny ? Date.now() + 300_000 : Date.now() - 1,
   });
   if (storedBroadcasterId !== null) dane.set('config:broadcaster_id', storedBroadcasterId);
-  if (storedBroadcasterId !== null) dane.set('config:d1_cutover_complete', storedBroadcasterId);
   if (storedBroadcasterId !== null) dane.set('config:broadcaster_username', 'testchannel');
 
   const db = {
@@ -467,6 +466,7 @@ test('import migracji odrzuca brak write freeze przed kontaktem z Kick i D1', as
 test('odczyt D1 ponawia inicjalizację kanału, gdy KV ma już broadcaster ID', async () => {
   const { env, dane } = utworzEnv();
   env.D1_ENABLED = 'true';
+  dane.set('config:d1_cutover_complete', broadcasterId);
   dane.set('config:broadcaster_username', 'testchannel');
   const zapytania = [];
   env.DB = {
