@@ -372,3 +372,22 @@ test('błąd OAuth nie ujawnia treści odpowiedzi ani tokenów w logach', async 
     console.error = poprzedniConsoleError;
   }
 });
+
+test('import migracji odrzuca brak write freeze przed kontaktem z Kick i D1', async () => {
+  const { env, zapisyKv, wywolaniaD1 } = utworzEnv();
+  env.MIGRATION_WRITE_FREEZE = 'false';
+  const poprzedniFetch = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('Kick nie powinien być wywołany.'); };
+  try {
+    const response = await worker.fetch(new Request(
+      'https://worker.test/api/admin/migrate-kv?dry_run=false',
+      { method: 'POST', headers: { Authorization: `Bearer ${sekretAdmina}` } },
+    ), env);
+    assert.equal(response.status, 409);
+    assert.deepEqual(await response.json(), { error: 'migration_write_freeze_required' });
+    assert.deepEqual(zapisyKv, []);
+    assert.deepEqual(wywolaniaD1, []);
+  } finally {
+    globalThis.fetch = poprzedniFetch;
+  }
+});
