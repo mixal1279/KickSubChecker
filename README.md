@@ -26,7 +26,7 @@ Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), 
 
 7. Przed wdrożeniem sprawdź, czy `wrangler.toml` zawiera prawdziwe ID KV oraz właściwy `REDIRECT_URI`; wartości `REPLACE_WITH_...` są tylko placeholderami.
 8. Wdróż Workera: `npx wrangler deploy`.
-9. Administrator tworzy jednorazowy link OAuth właściciela kanału przez `POST https://TWOJ-WORKER.workers.dev/api/owner/start` z nagłówkiem `Authorization: Bearer TWÓJ_SEKRET`, a następnie przekazuje zwrócone `url` właścicielowi kanału (np. Ljay). Link jest jednorazowy i wygasa po 10 minutach. Właściciel zatwierdza OAuth.
+9. Administrator tworzy jednorazowy link OAuth właściciela kanału przez `POST https://TWOJ-WORKER.workers.dev/api/owner/start` z nagłówkiem `Authorization: Bearer TWÓJ_ADMIN_API_SECRET`, a następnie przekazuje zwrócone `url` właścicielowi kanału (np. Ljay). Użyj `ADMIN_API_SECRET`, nigdy `BOT_API_SECRET`. Link jest jednorazowy i wygasa po 10 minutach. Właściciel zatwierdza OAuth.
 
    ```bash
    curl -X POST 'https://TWOJ-WORKER.workers.dev/api/owner/start' \
@@ -54,10 +54,10 @@ Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), 
 ## API Workera
 - `GET /authorize?owner_token=...` — jednorazowy OAuth właściciela kanału; link generuje administrator.
 - `GET /authorize?link_token=...` — jednorazowy OAuth widza; link generuje `/polacz-konto`.
-- `POST /api/owner/start` — tworzy jednorazowy link OAuth właściciela kanału, wymaga Bearer secret.
+- `POST /api/owner/start` — tworzy jednorazowy link OAuth właściciela kanału, wymaga `ADMIN_API_SECRET`.
 - `GET /callback` — callback OAuth właściciela albo widza.
 - `POST /webhook` — podpisane eventy Kick.
-- `POST /register-events` — chroniona rejestracja eventów.
+- `POST /register-events` — administracyjna rejestracja eventów, wymaga `ADMIN_API_SECRET`.
 - `GET /api/check?username=nick` — status suba (`active`, `inactive` lub `unknown`), wymaga Bearer secret. Brak rekordu albo niepoprawna data wygaśnięcia zwraca `unknown`, a nie `inactive`.
 - `POST /api/link/start` — tworzy jednorazowy link OAuth dla ID Discorda, wymaga Bearer secret.
 - `POST /api/admin/migrate-kv` — migracja KV → D1; wymaga osobnego `ADMIN_API_SECRET` (nie `BOT_API_SECRET`), domyślnie wykonuje wyłącznie dry-run. Import uruchamia `?dry_run=false`.
