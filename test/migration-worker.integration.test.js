@@ -38,9 +38,24 @@ function utworzEnv({
   let aktywnaBlokada = false;
   let tokenyWlasciciela = null;
   let stanCutoveru = null;
+  let stanGlobalnyCutoveru = null;
   const env = {
     OAUTH_TOKENS: {
       getByName(nazwa) {
+        if (nazwa === 'cutover-registry') {
+          return {
+            async pobierzGlobalnyStanCutoveru() {
+              return stanGlobalnyCutoveru ? { ...stanGlobalnyCutoveru } : null;
+            },
+            async oznaczGlobalnyCutoverD1(id) {
+              if (stanGlobalnyCutoveru && stanGlobalnyCutoveru.broadcaster_id !== id) {
+                throw new Error('installation broadcaster mismatch');
+              }
+              stanGlobalnyCutoveru = { broadcaster_id: id, backend: 'd1' };
+              return true;
+            },
+          };
+        }
         if (nazwa.startsWith('cutover-')) {
           const broadcasterId = nazwa.slice('cutover-'.length);
           return {
@@ -121,7 +136,7 @@ function utworzEnv({
     },
   };
 
-  return { env, dane, zapisyKv, wywolaniaD1, pobierzTokenyWlasciciela: () => tokenyWlasciciela, ustawStanCutoveru: (stan) => { stanCutoveru = stan; } };
+  return { env, dane, zapisyKv, wywolaniaD1, pobierzTokenyWlasciciela: () => tokenyWlasciciela, ustawStanCutoveru: (stan) => { stanCutoveru = stan; }, ustawGlobalnyStanCutoveru: (stan) => { stanGlobalnyCutoveru = stan; } };
 }
 
 function utworzRequest() {
@@ -169,6 +184,33 @@ test('Worker nie ufa ID z KV jako jedynemu kluczowi partycji Durable Object', as
   const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
   assert.equal(response.status, 503);
   assert.equal((await response.json()).error, 'd1_cutover_broadcaster_unavailable');
+});
+
+test('Worker wykrywa zmianę KICK_BROADCASTER_ID nawet gdy KV chwilowo nie zwraca ID', async () => {
+  const { env, dane, ustawStanCutoveru, ustawGlobalnyStanCutoveru } = utworzEnv();
+  ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
+  ustawGlobalnyStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
+  dane.delete('config:broadcaster_id');
+  env.KICK_BROADCASTER_ID = '987654321';
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_broadcaster_mismatch');
+});
+
+test('Worker blokuje ruch przy osieroconym latchu kanału bez rejestru instalacji', async () => {
+  const { env, ustawStanCutoveru } = utworzEnv();
+  ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_registry_repair_required');
+});
+
+test('Worker blokuje ruch gdy rejestr instalacji jest aktywny, ale latch kanału nie istnieje', async () => {
+  const { env, ustawGlobalnyStanCutoveru } = utworzEnv();
+  ustawGlobalnyStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_channel_latch_incomplete');
 });
 
 test('Worker blokuje powrót do KV po aktywacji latcha D1', async () => {
