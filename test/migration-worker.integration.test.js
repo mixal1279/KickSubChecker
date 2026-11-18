@@ -154,6 +154,23 @@ test('Worker fail-closed przy rozbieżności KICK_BROADCASTER_ID i trwałej konf
   assert.equal((await response.json()).error, 'd1_cutover_broadcaster_mismatch');
 });
 
+test('latch DO jest wykrywany mimo chwilowego braku config:broadcaster_id w KV', async () => {
+  const { env, dane, ustawStanCutoveru } = utworzEnv();
+  ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
+  dane.delete('config:broadcaster_id');
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_requires_d1_backend');
+});
+
+test('Worker nie ufa ID z KV jako jedynemu kluczowi partycji Durable Object', async () => {
+  const { env } = utworzEnv();
+  env.KICK_BROADCASTER_ID = '';
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_broadcaster_unavailable');
+});
+
 test('Worker blokuje powrót do KV po aktywacji latcha D1', async () => {
   const { env, ustawStanCutoveru } = utworzEnv();
   ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
