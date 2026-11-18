@@ -48,7 +48,7 @@ function utworzEnv({
             return { ...tokenyWlasciciela };
           },
           async zapiszTokeny(dane) { tokenyWlasciciela = { ...dane }; return true; },
-          async zapiszOdświeżoneTokeny(dane, id, poprzedniRefreshToken) {
+          async zapiszOdswiezoneTokeny(dane, id, poprzedniRefreshToken) {
             if (!aktywnaBlokada || id !== 'test-refresh-lease'
               || tokenyWlasciciela?.refresh_token !== poprzedniRefreshToken) return false;
             tokenyWlasciciela = { ...dane };
