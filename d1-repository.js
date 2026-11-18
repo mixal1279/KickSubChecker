@@ -129,7 +129,11 @@ export function utworzRepozytoriumD1(db) {
         SET kick_user_id = ?
         WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
           AND kick_user_id IS NULL
-      `).bind(kick, kanal, nick).run();
+          AND (
+            SELECT COUNT(DISTINCT kick_user_id) FROM account_links
+            WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
+          ) = 1
+      `).bind(kick, kanal, nick, kanal, nick).run();
       sprawdzWynik(wynik, 'Uzupełnienie ID historycznych subskrypcji');
       return Number(wynik.meta?.changes || 0);
     },
@@ -368,9 +372,12 @@ export function utworzRepozytoriumD1(db) {
         db.prepare(`
           INSERT INTO subscriptions (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
           SELECT ?, ?, COALESCE(?, (
-            SELECT kick_user_id FROM account_links
+            SELECT CASE
+              WHEN COUNT(DISTINCT kick_user_id) = 1 THEN MIN(kick_user_id)
+              ELSE NULL
+            END
+            FROM account_links
             WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
-            LIMIT 1
           )), ?, ?, ?, ?
           WHERE EXISTS (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?)
           ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
