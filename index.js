@@ -5,6 +5,9 @@ import { walidujBroadcasteraWebhooka, walidujIdSubskrypcjiWebhooka, walidujTypIW
 export { OAuthTokenStore } from './oauth-token-store.js';
 
 const TOKEN_TTL_MS = 10 * 60 * 1000;
+// W trybie KV odbiorca prezentu zużywa maksymalnie 4 operacje KV.
+// Limit 200 pozostawia zapas w budżecie 1000 operacji usług wewnętrznych Workera.
+const MAX_KV_GIFT_RECIPIENTS = 200;
 function magazynTokenow(env, token) {
   if (!env.OAUTH_TOKENS || typeof env.OAUTH_TOKENS.getByName !== 'function') {
     throw new Error('Brak bindingu OAUTH_TOKENS — wymagane wdrożenie migracji Durable Object.');
@@ -499,6 +502,9 @@ async function handleWebhook(request, env) {
   } else if (eventType === 'channel.subscription.gifts') {
     const giftees = payload?.giftees;
     if (!Array.isArray(giftees) || !giftees.length || !validExpiry) return text('Invalid gifted subscription payload', 400);
+    if (giftees.length > MAX_KV_GIFT_RECIPIENTS) {
+      return text('Gift recipient limit exceeded for KV backend', 413);
+    }
     let zapisani = 0;
     for (const giftee of giftees) {
       if (
