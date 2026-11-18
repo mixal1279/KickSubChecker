@@ -253,23 +253,40 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
     assert.equal(Number(historyById.results?.[0]?.expires_at_ms), historyExpiry);
     assert.equal(historyById.results?.[0]?.source, 'channel.subscription.renewal');
 
+    const migrationLease = 'integration-migration-lease-token';
+    await zapytaj(
+      "INSERT INTO migration_runs (broadcaster_id, status, phase, counts_json, lease_token, lease_expires_at_ms, started_at_ms, updated_at_ms) VALUES (?, 'running', 'links', '{}', ?, ?, ?, ?)",
+      [broadcasterId, migrationLease, teraz + 300_000, teraz, teraz],
+    );
+
     const linkSourceKey = `link:discord:${discordId}`;
     const linkBatch = [
       {
-        sql: 'INSERT INTO account_links (broadcaster_id, discord_user_id, kick_user_id, kick_username, linked_at_ms, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
-        params: [broadcasterId, discordId, kickId, 'integration-user', teraz, teraz],
+        sql: `INSERT INTO account_links (broadcaster_id, discord_user_id, kick_user_id, kick_username, linked_at_ms, updated_at_ms)
+          SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (
+            SELECT 1 FROM migration_runs WHERE broadcaster_id = ? AND status = 'running'
+              AND lease_token = ? AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          ) ON CONFLICT DO NOTHING`,
+        params: [broadcasterId, discordId, kickId, 'integration-user', teraz, teraz, broadcasterId, migrationLease],
       },
       {
         sql: `INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms)
           SELECT ?, 'links', ?, ? WHERE EXISTS (
             SELECT 1 FROM account_links
             WHERE broadcaster_id = ? AND discord_user_id = ? AND kick_user_id = ?
+          ) AND EXISTS (
+            SELECT 1 FROM migration_runs WHERE broadcaster_id = ? AND status = 'running'
+              AND lease_token = ? AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
           )`,
-        params: [broadcasterId, linkSourceKey, teraz, broadcasterId, discordId, kickId],
+        params: [broadcasterId, linkSourceKey, teraz, broadcasterId, discordId, kickId, broadcasterId, migrationLease],
       },
       {
-        sql: "SELECT 1 AS imported FROM migration_items WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ? LIMIT 1",
-        params: [broadcasterId, linkSourceKey],
+        sql: `SELECT CASE WHEN EXISTS (
+          SELECT 1 FROM migration_runs WHERE broadcaster_id = ? AND status = 'running'
+            AND lease_token = ? AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+        ) THEN (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ? LIMIT 1)
+        ELSE -1 END AS imported`,
+        params: [broadcasterId, migrationLease, broadcasterId, linkSourceKey],
       },
     ];
     const linkFirst = await batchuj(linkBatch);
@@ -278,29 +295,40 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
     assert.equal(linkRetry[2]?.results?.[0]?.imported, 1);
 
     const subSourceKey = 'sub:integration-user';
-    const subBatch = (expiry, username, source) => [
+    const subBatch = (expiry, username, source, lease = migrationLease) => [
       {
-        sql: "INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms) VALUES (?, 'subscriptions', ?, ?)",
-        params: [broadcasterId, subSourceKey, teraz],
+        sql: `INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms)
+          SELECT ?, 'subscriptions', ?, ? WHERE EXISTS (
+            SELECT 1 FROM migration_runs WHERE broadcaster_id = ? AND status = 'running'
+              AND lease_token = ? AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          )`,
+        params: [broadcasterId, subSourceKey, teraz, broadcasterId, lease],
       },
       {
         sql: `INSERT INTO subscriptions (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
           SELECT ?, ?, ?, ?, ?, ?, ?
           WHERE EXISTS (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?)
+            AND EXISTS (SELECT 1 FROM migration_runs WHERE broadcaster_id = ? AND status = 'running'
+              AND lease_token = ? AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER))
           ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
             kick_user_id = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN COALESCE(excluded.kick_user_id, subscriptions.kick_user_id) ELSE subscriptions.kick_user_id END,
             kick_username = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.kick_username ELSE subscriptions.kick_username END,
             expires_at_ms = MAX(subscriptions.expires_at_ms, excluded.expires_at_ms),
             source = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.source ELSE subscriptions.source END,
             updated_at_ms = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms END`,
-        params: [broadcasterId, `id:${kickId}`, kickId, username, expiry, source, teraz, broadcasterId, subSourceKey],
+        params: [broadcasterId, `id:${kickId}`, kickId, username, expiry, source, teraz, broadcasterId, subSourceKey, broadcasterId, lease],
       },
       {
-        sql: "SELECT 1 AS imported FROM migration_items WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ? LIMIT 1",
-        params: [broadcasterId, subSourceKey],
+        sql: `SELECT CASE WHEN EXISTS (SELECT 1 FROM migration_runs WHERE broadcaster_id = ? AND status = 'running'
+          AND lease_token = ? AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER))
+          THEN (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ? LIMIT 1)
+          ELSE -1 END AS imported`,
+        params: [broadcasterId, lease, broadcasterId, subSourceKey],
       },
     ];
     const expiryNowa = teraz + 120_000;
+    const staryLease = await batchuj(subBatch(teraz + 180_000, 'stale-worker', 'new', 'stale-migration-lease-token'));
+    assert.equal(staryLease[2]?.results?.[0]?.imported, -1, 'Stary lease nie może zapisać subskrypcji.');
     const subFirst = await batchuj(subBatch(expiryNowa, 'newer-user', 'renewal'));
     const subRetry = await batchuj(subBatch(teraz + 1, 'older-user', 'new'));
     assert.equal(subFirst[2]?.results?.[0]?.imported, 1);
