@@ -6,11 +6,35 @@ import { OAuthTokenStore } from '../oauth-token-store.js';
 function utworzMagazyn() {
   const dane = new Map();
   const blokady = new Map();
+  let tokenyWlasciciela = null;
   let alarm = null;
   const sql = {
     exec(tekst, ...args) {
       const q = tekst.replace(/\\s+/g, ' ').trim().toUpperCase();
       if (q.startsWith('CREATE TABLE') || q.startsWith('CREATE INDEX')) return { toArray: () => [] };
+      if (q.startsWith('SELECT ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT FROM OAUTH_CREDENTIALS')) {
+        return { toArray: () => tokenyWlasciciela ? [{ ...tokenyWlasciciela }] : [] };
+      }
+      if (q.startsWith('INSERT INTO OAUTH_CREDENTIALS (ID, ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT) VALUES (1, ?, ?, ?) ON CONFLICT(ID) DO NOTHING')) {
+        if (!tokenyWlasciciela) tokenyWlasciciela = { access_token: args[0], refresh_token: args[1], expires_at: args[2] };
+        return { toArray: () => [] };
+      }
+      if (q.startsWith('INSERT INTO OAUTH_CREDENTIALS (ID, ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT) VALUES (1, ?, ?, ?) ON CONFLICT(ID) DO UPDATE SET')) {
+        tokenyWlasciciela = { access_token: args[0], refresh_token: args[1], expires_at: args[2] };
+        return { toArray: () => [] };
+      }
+      if (q.startsWith('SELECT RESERVATION_ID FROM OAUTH_LOCKS')) {
+        const [nazwa, id, teraz] = args;
+        const wpis = blokady.get(nazwa);
+        return { toArray: () => wpis && wpis.reservation_id === id && wpis.lease_until > teraz
+          ? [{ reservation_id: id }] : [] };
+      }
+      if (q.startsWith('UPDATE OAUTH_CREDENTIALS SET ACCESS_TOKEN = ?, REFRESH_TOKEN = ?, EXPIRES_AT = ? WHERE ID = 1 AND REFRESH_TOKEN = ? RETURNING ID')) {
+        const [access, refresh, expires, poprzedni] = args;
+        if (!tokenyWlasciciela || tokenyWlasciciela.refresh_token !== poprzedni) return { toArray: () => [] };
+        tokenyWlasciciela = { access_token: access, refresh_token: refresh, expires_at: expires };
+        return { toArray: () => [{ id: 1 }] };
+      }
       if (q.startsWith('INSERT INTO OAUTH_LOCKS')) {
         const [nazwa, id, leaseDo, teraz] = args;
         const obecna = blokady.get(nazwa);
@@ -77,11 +101,13 @@ function utworzMagazyn() {
       transactionSync(fn) {
         const kopia = structuredClone([...dane.entries()]);
         const kopiaBlokad = structuredClone([...blokady.entries()]);
+        const kopiaTokenow = structuredClone(tokenyWlasciciela);
         try { return fn(); } catch (error) {
           dane.clear();
           for (const [klucz, wartosc] of kopia) dane.set(klucz, wartosc);
           blokady.clear();
           for (const [klucz, wartosc] of kopiaBlokad) blokady.set(klucz, wartosc);
+          tokenyWlasciciela = kopiaTokenow;
           throw error;
         }
       },
@@ -215,6 +241,44 @@ test('wygasła blokada odświeżania może zostać bezpiecznie przejęta', async
   }
 });
 
+
+
+test('import tokenów legacy jest atomowy i nie nadpisuje nowszych danych', async () => {
+  const { magazyn } = utworzMagazyn();
+  const pierwsze = {
+    access_token: 'access-v1', refresh_token: 'refresh-v1', expires_at: Date.now() + 60_000,
+  };
+  const stare = {
+    access_token: 'stale-access', refresh_token: 'stale-refresh', expires_at: Date.now() + 30_000,
+  };
+  assert.deepEqual(await magazyn.zainicjujTokeny(pierwsze), pierwsze);
+  assert.deepEqual(await magazyn.zainicjujTokeny(stare), pierwsze);
+  assert.deepEqual(await magazyn.pobierzTokeny(), pierwsze);
+});
+
+test('rotacja tokena wymaga aktywnej blokady i zgodnego poprzedniego refresh tokena', async () => {
+  const { magazyn } = utworzMagazyn();
+  const pierwsze = {
+    access_token: 'access-v1', refresh_token: 'refresh-v1', expires_at: Date.now() + 60_000,
+  };
+  await magazyn.zainicjujTokeny(pierwsze);
+  const lease = await magazyn.zarezerwujBlokade('broadcaster', 20_000);
+  assert.ok(lease);
+  const nowe = {
+    access_token: 'access-v2', refresh_token: 'refresh-v2', expires_at: Date.now() + 120_000,
+  };
+  assert.equal(await magazyn.zapiszOdświeżoneTokeny(nowe, 'obcy-lease', 'refresh-v1'), false);
+  assert.equal(await magazyn.zapiszOdświeżoneTokeny(nowe, lease, 'stary-refresh'), false);
+  assert.equal(await magazyn.zapiszOdświeżoneTokeny(nowe, lease, 'refresh-v1'), true);
+  assert.deepEqual(await magazyn.pobierzTokeny(), nowe);
+  assert.equal(await magazyn.zapiszOdświeżoneTokeny(pierwsze, lease, 'refresh-v1'), false);
+});
+
+test('zapis tokenów odrzuca nieprawidłowe dane', async () => {
+  const { magazyn } = utworzMagazyn();
+  await assert.rejects(magazyn.zapiszTokeny({ access_token: 'a', refresh_token: '', expires_at: 1 }), /tokenów/);
+  await assert.rejects(magazyn.zainicjujTokeny({ access_token: 'a', refresh_token: 'r', expires_at: 0 }), /tokenów/);
+});
 
 test('alarm usuwa wygasłe tokeny i ustawia termin kolejnego czyszczenia', async () => {
   const { magazyn, dane, pobierzAlarm } = utworzMagazyn();
