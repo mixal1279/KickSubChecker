@@ -104,7 +104,7 @@ function utworzEnv({
     },
   };
 
-  return { env, dane, zapisyKv, wywolaniaD1 };
+  return { env, dane, zapisyKv, wywolaniaD1, pobierzTokenyWlasciciela: () => tokenyWlasciciela };
 }
 
 function utworzRequest() {
@@ -143,7 +143,7 @@ test('endpoint dry-run wykonuje wyłącznie GET tożsamości Kick i nie zapisuje
 });
 
 test('endpoint dry-run odrzuca wygasły token bez refresh OAuth i bez zapisów', async () => {
-  const { env, zapisyKv, wywolaniaD1 } = utworzEnv({ tokenWazny: false });
+  const { env, zapisyKv, wywolaniaD1, pobierzTokenyWlasciciela } = utworzEnv({ tokenWazny: false });
   const poprzedniFetch = globalThis.fetch;
   const wywolaniaHttp = [];
 
@@ -363,6 +363,18 @@ test('import wygasłego OAuth odświeża token z timeoutem i nie przechodzi dale
       'https://api.kick.com/public/v1/users',
     ]);
     assert.equal(zapisyKv.length, 0, 'rotacja tokenów nie może zapisywać do eventual-consistent KV');
+    assert.deepEqual(pobierzTokenyWlasciciela(), {
+      access_token: 'refreshed-access-token',
+      refresh_token: 'refreshed-refresh-token',
+      expires_at: pobierzTokenyWlasciciela().expires_at,
+    });
+    const ponowienie = await worker.fetch(new Request(
+      'https://worker.test/api/admin/migrate-kv?dry_run=true',
+      { method: 'POST', headers: { Authorization: `Bearer ${sekretAdmina}` } },
+    ), env);
+    assert.equal(ponowienie.status, 200);
+    assert.equal(wywolania.filter((adres) => adres === 'https://id.kick.com/oauth/token').length, 1,
+      'po rotacji Worker musi korzystać z DO, nawet gdy KV nadal zwraca stary refresh token');
     assert.equal(wywolaniaD1.length, 1);
     assert.equal(wywolaniaD1[0].typ, 'prepare');
   } finally {
