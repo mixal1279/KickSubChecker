@@ -7,7 +7,7 @@ export async function pobierzTokenMigracji({
 }) {
   if (typeof pobierzToken !== 'function'
     && (!env?.SUBS_KV || typeof env.SUBS_KV.get !== 'function')) {
-    throw new TypeError('Brak magazynu tokenów dla migratora.');
+    throw new TypeError('Brak magazynu KV lub tokenów dla migratora.');
   }
 
   const zapisane = typeof pobierzToken === 'function'
