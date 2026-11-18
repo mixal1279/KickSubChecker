@@ -136,15 +136,22 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
         } else if (polecenie.sql.includes('INSERT INTO subscriptions')) {
           const [broadcasterId, subscriberKey, kickId, username, expiry, source] = polecenie.args;
           subskrypcjeD1.set(broadcasterId + '|' + subscriberKey, { kickId, username, expiry, source });
+        } else if (polecenie.sql.includes('SELECT 1 AS imported FROM migration_items')) {
+          // SELECT w trzecim kroku batch potwierdza marker zapisany atomowo w tej samej transakcji.
+          continue;
         } else {
           throw new Error('Nieobsługiwane SQL batch: ' + polecenie.sql);
         }
       }
-      return polecenia.map((_, i) => ({
-        success: true,
-        meta: { changes: 1 },
-        results: i === 2 ? [{ imported: 1 }] : [],
-      }));
+      return polecenia.map((polecenie, i) => {
+        const wynik = { success: true, meta: { changes: 1 }, results: [] };
+        if (polecenie.sql.includes('SELECT 1 AS imported FROM migration_items')) {
+          const [broadcasterId, sourceKey] = polecenie.args;
+          const phase = polecenie.sql.includes("phase = 'links'") ? 'links' : 'subscriptions';
+          if (markery.has(phase + '|' + sourceKey)) wynik.results = [{ imported: 1 }];
+        }
+        return wynik;
+      });
     },
   };
 
