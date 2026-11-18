@@ -313,7 +313,7 @@ async function handleAuthorize(request, env) {
   }
   const verifier = randomString(64); const challenge = base64UrlEncode(await sha256(verifier)); const state = randomString(24);
   await zapiszTokenJednorazowy(env, state, 'oauth-state', { verifier, discord_id: linkDiscordId, owner: ownerFlow, created_at: Date.now() });
-  const params = new URLSearchParams({ response_type: 'code', client_id: env.KICK_CLIENT_ID, redirect_uri: env.REDIRECT_URI, scope: 'user:read channel:read events:subscribe', code_challenge: challenge, code_challenge_method: 'S256', state });
+  const params = new URLSearchParams({ response_type: 'code', client_id: env.KICK_CLIENT_ID, redirect_uri: env.REDIRECT_URI, scope: 'user:read events:subscribe', code_challenge: challenge, code_challenge_method: 'S256', state });
   return Response.redirect(`${KICK_AUTHORIZE_URL}?${params}`, 302);
 }
 async function handleCallback(request, env) {
