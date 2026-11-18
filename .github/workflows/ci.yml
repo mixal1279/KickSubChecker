@@ -34,3 +34,18 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           D1_TEST_DATABASE_ID: ${{ secrets.D1_TEST_DATABASE_ID }}
         run: npm test
+
+  node18-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Pobierz repozytorium
+        uses: actions/checkout@v4
+      - name: Skonfiguruj Node.js 18.17
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18.17.0
+      - name: Sprawdź składnię
+        run: npm run check
+      - name: Uruchom testy zgodności Node 18
+        run: npm test
