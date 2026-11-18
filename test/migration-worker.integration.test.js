@@ -146,6 +146,14 @@ test('Worker fail-closed przy niedostępnym bindingu latcha cutoveru', async () 
   assert.equal((await response.json()).error, 'd1_cutover_latch_unavailable');
 });
 
+test('Worker fail-closed przy rozbieżności KICK_BROADCASTER_ID i trwałej konfiguracji KV', async () => {
+  const { env } = utworzEnv();
+  env.KICK_BROADCASTER_ID = '987654321';
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_broadcaster_mismatch');
+});
+
 test('Worker blokuje powrót do KV po aktywacji latcha D1', async () => {
   const { env, ustawStanCutoveru } = utworzEnv();
   ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
