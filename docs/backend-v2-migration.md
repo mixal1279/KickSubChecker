@@ -132,7 +132,7 @@ Callback ponownej autoryzacji właściciela zapisuje tokeny bezpośrednio do DO 
 
 ## Ograniczenie spójności markera cutoveru
 
-**Bloker przed produkcyjnym cutoverem:** `config:d1_cutover_complete` w KV jest znacznikiem pomocniczym, a nie globalnym, silnie spójnym latch'em. KV zapewnia eventual consistency; odczyt w innej lokalizacji może przez pewien czas zwrócić brak lub starszą wartość po udanym zapisie. Dlatego sam marker KV nie daje formalnej gwarancji, że każda instancja Workera natychmiast zablokuje powrót do KV po przełączeniu.
+**Wcześniejszy bloker architektoniczny — rozwiązany w kodzie, wymaga poprawnej konfiguracji wdrożenia:** `config:d1_cutover_complete` w KV nie jest globalnym, silnie spójnym latch'em. KV zapewnia eventual consistency; odczyt w innej lokalizacji może przez pewien czas zwrócić brak lub starszą wartość po udanym zapisie. Dlatego źródłem prawdy jest obecnie per-broadcaster SQLite Durable Object, a marker KV służy wyłącznie do kontroli zgodności i naprawy. `KICK_BROADCASTER_ID` musi być stabilnie ustawione przed wdrożeniem.
 
 Latch został zaimplementowany w istniejącej klasie SQLite Durable Object `OAuthTokenStore`, bez tworzenia nowego namespace ani zmiany migracji klas: instancja jest partycjonowana nazwą `cutover-<broadcaster_id>`, a tabela `cutover_state` wiąże ją dodatkowo z dokładnym ID kanału. Zapis `d1` jest atomowy, idempotentny i monotoniczny. Worker sprawdza go przed zwykłym routingiem; awaria lub brak bindingu jest fail-closed. Testy jednostkowe obejmują izolację kanałów, niezgodny ID i idempotencję, a testy Workera obejmują brak latcha, awarię bindingu i blokadę rollbacku. Produkcyjny cutover nadal wymaga osobnej walidacji wdrożenia i drainu starych instancji.
 
