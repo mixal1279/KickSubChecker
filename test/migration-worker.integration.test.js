@@ -520,7 +520,7 @@ test('import migracji odrzuca brak write freeze przed kontaktem z Kick i D1', as
 });
 
 test('odczyt D1 ponawia inicjalizację kanału, gdy KV ma już broadcaster ID', async () => {
-  const { env, dane } = utworzEnv();
+  const { env, dane, ustawStanCutoveru } = utworzEnv();
   env.D1_ENABLED = 'true';
   dane.set('config:d1_cutover_complete', broadcasterId);
   ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
