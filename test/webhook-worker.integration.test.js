@@ -169,6 +169,37 @@ test('starszy webhook nie cofa indeksu subskrypcji po Kick user ID', async () =>
   assert.equal(JSON.parse(indeks.wartosc).expires_at, nowszeWygasniecie);
 });
 
+test('starszy webhook uzupełnia brakujące Kick User ID bez cofania daty subskrypcji', async () => {
+  const env = utworzEnv();
+  const nowszeWygasniecie = new Date(Date.now() + 30 * 86400_000).toISOString();
+  const starszeWygasniecie = new Date(Date.now() + 10 * 86400_000).toISOString();
+  await env.SUBS_KV.put('sub:historicuser', JSON.stringify({
+    user_id: '',
+    username: 'HistoricUser',
+    expires_at: nowszeWygasniecie,
+    source: 'channel.subscription.renewal',
+    updated_at: new Date().toISOString(),
+  }));
+
+  const response = await worker.fetch(await utworzZadanie(env, {
+    eventId: '01TESTEVENT0000000000000005',
+    payload: {
+      broadcaster: { user_id: broadcasterId, username: 'testchannel' },
+      subscriber: { user_id: '987654322', username: 'HistoricUser' },
+      expires_at: starszeWygasniecie,
+    },
+  }), env);
+
+  assert.equal(response.status, 200);
+  const poNicku = await env.SUBS_KV.get('sub:historicuser', 'json');
+  const poId = await env.SUBS_KV.get('sub:user_id:987654322', 'json');
+  assert.equal(poNicku.user_id, '987654322');
+  assert.equal(poNicku.expires_at, nowszeWygasniecie);
+  assert.equal(poNicku.source, 'channel.subscription.renewal');
+  assert.equal(poId.user_id, '987654322');
+  assert.equal(poId.expires_at, nowszeWygasniecie);
+});
+
 test('KV webhook odrzuca prezent zbyt duży dla budżetu operacji przed zapisami', async () => {
   const env = utworzEnv();
   const giftees = Array.from({ length: 201 }, (_, i) => ({
