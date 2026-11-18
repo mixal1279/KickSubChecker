@@ -275,6 +275,7 @@ test('callback odrzuca niezgodność oczekiwanej tożsamości i nie zapisuje tok
 test('callback odrzuca broadcaster ID niezgodny z konfiguracją', async () => {
   const env = utworzEnv();
   await env.SUBS_KV.put('config:broadcaster_id', '999999999');
+  env.KICK_BROADCASTER_ID = '999999999';
   await dodajState(env);
   await zMockowanymFetch(async (url) => String(url).includes('/oauth/token')
     ? odpowiedzKick({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 })
