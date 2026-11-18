@@ -587,3 +587,20 @@ test('D1 nie obsługuje ruchu aplikacji przed zakończeniem importu KV', async (
   assert.deepEqual(await response.json(), { error: 'd1_cutover_requires_completed_migration' });
   assert.deepEqual(wywolaniaD1, []);
 });
+
+
+test('znacznik cutoveru z innego broadcastera blokuje backend D1', async () => {
+  const { env, dane, wywolaniaD1 } = utworzEnv();
+  env.D1_ENABLED = 'true';
+  env.MIGRATION_WRITE_FREEZE = 'false';
+  dane.set('config:d1_cutover_complete', '987654321');
+
+  const response = await worker.fetch(new Request(
+    'https://worker.test/api/check?username=testuser',
+    { headers: { Authorization: `Bearer ${sekret}` } },
+  ), env);
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'd1_cutover_broadcaster_mismatch' });
+  assert.deepEqual(wywolaniaD1, []);
+});
