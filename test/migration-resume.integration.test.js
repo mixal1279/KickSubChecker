@@ -13,6 +13,7 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
   const rekordy = new Map();
   const subskrypcjeD1 = new Map();
   const markery = new Set();
+  const konfiguracjaKv = new Map([['config:broadcaster_id', kanal]]);
   if (fazaPoczatkowa === 'subscriptions') markery.add('links|link:discord:10000000000000000');
   let stan = null;
   let bladCheckpointRaz = bladCheckpoint;
@@ -211,8 +212,8 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
     DB: db,
     SUBS_KV: {
       async get(key, type) {
+        if (konfiguracjaKv.has(key)) return konfiguracjaKv.get(key);
         if (key === 'ljay:tokens') return { access_token: token, refresh_token: 'refresh', expires_at: Date.now() + 300000 };
-        if (key === 'config:broadcaster_id') return kanal;
         if (key.startsWith('link:discord:')) {
           if (blokujPierwszyOdczyt && !zablokowano) {
             zablokowano = true;
@@ -258,13 +259,14 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
         if (key === 'config:d1_cutover_complete' && value !== kanal) {
           throw new Error('Marker cutoveru musi wskazywać właściwy kanał.');
         }
+        konfiguracjaKv.set(key, value);
       },
       async delete() { throw new Error('Migracja nie powinna usuwać KV.'); },
     },
   };
 
   return {
-    env, stan: () => stan, rekordy, subskrypcjeD1, markery, wywolania,
+    env, stan: () => stan, rekordy, subskrypcjeD1, markery, konfiguracjaKv, wywolania,
     odczytRozpoczety, odblokujOdczyt: zwolnijOdczyt,
   };
 }
@@ -405,6 +407,7 @@ test('wznowienie po awarii finalizacji nie przetwarza ponownie stron KV', async 
     assert.deepEqual(JSON.parse(srodowisko.stan().counts_json), licznikiPoPierwszej);
     assert.equal(srodowisko.subskrypcjeD1.size, 3);
     assert.equal(srodowisko.stan().status, 'completed');
+    assert.equal(srodowisko.konfiguracjaKv.get('config:d1_cutover_complete'), kanal);
   });
 });
 
