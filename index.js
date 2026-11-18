@@ -159,6 +159,7 @@ function sprawdzKonfiguracjeBackendu(env) {
 }
 async function blokujPowrotDoKvPoMigracji(env, pathname) {
   if (['/', '/preview', '/api/admin/migrate-kv'].includes(pathname)) return false;
+  if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') return false;
   const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
   // D1 nie może zostać aktywowane bez zakończonego importu i trwałego znacznika.
   if (env.D1_ENABLED === 'true') return marker == null || marker === '';
