@@ -21,7 +21,7 @@ Zmiana zachowuje endpointy:
 
 `/api/check` obsługuje zarówno `username`, jak i `user_id`. Odczyt po ID ma pierwszeństwo, a odpowiedź zachowuje format statusu `active`, `inactive` lub `unknown`. KV utrzymuje indeksy `sub:<username>` i `sub:user_id:<id>`.
 
-Odświeżanie OAuth używa SQLite Durable Object jako źródła prawdy. Przy pierwszym odczycie istniejący `ljay:tokens` z KV jest importowany atomowo tylko wtedy, gdy magazyn DO jest pusty. Rotacja wymaga aktywnej blokady oraz zgodności poprzedniego refresh tokena (CAS); zapis po wygaśnięciu lease lub z nieaktualnym tokenem jest odrzucany. Poprzedni refresh token jest zachowywany, jeśli Kick nie zwróci nowego. Przy pierwszym ustaleniu kanału Worker potwierdza ID przez autoryzowany endpoint Kick. Callback właściciela nie zapisze tokenów ani konfiguracji, jeśli ID autoryzowanego konta różni się od istniejącego `config:broadcaster_id` lub `KICK_BROADCASTER_ID`. Zmiana kanału wymaga osobnej procedury.
+Odświeżanie OAuth używa SQLite Durable Object jako źródła prawdy. Przy pierwszym odczycie istniejący `ljay:tokens` z KV jest importowany atomowo tylko wtedy, gdy magazyn DO jest pusty. Rotacja wymaga aktywnej blokady oraz zgodności poprzedniego refresh tokena (CAS); zapis po wygaśnięciu lease lub z nieaktualnym tokenem jest odrzucany. Worker wymaga nowego `refresh_token` w odpowiedzi Kick i odrzuca niekompletną odpowiedź bez zmiany zapisanych poświadczeń. Przy pierwszym ustaleniu kanału Worker potwierdza ID przez autoryzowany endpoint Kick. Callback właściciela nie zapisze tokenów ani konfiguracji, jeśli ID autoryzowanego konta różni się od istniejącego `config:broadcaster_id` lub `KICK_BROADCASTER_ID`. Zmiana kanału wymaga osobnej procedury.
 
 ## Migracje SQL
 
