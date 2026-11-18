@@ -387,19 +387,25 @@ export function utworzRepozytoriumD1(db) {
     },
 
 
-    async importujPowiazanieMigracja({ broadcasterId, sourceKey, discordUserId, kickUserId, kickUsername }) {
+    async importujPowiazanieMigracja({ broadcasterId, sourceKey, discordUserId, kickUserId, kickUsername, leaseToken }) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
       const discord = wymagajId(discordUserId, 'ID użytkownika Discord');
       const kick = wymagajId(kickUserId, 'ID użytkownika Kick');
       const nick = normalizujNick(kickUsername);
       if (typeof sourceKey !== 'string' || !sourceKey.startsWith('link:discord:') || sourceKey.length > 256) throw new TypeError('Nieprawidłowy klucz źródłowy powiązania.');
+      if (typeof leaseToken !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(leaseToken)) throw new TypeError('Nieprawidłowy token blokady migracji.');
       const teraz = Date.now();
       const wyniki = await db.batch([
         db.prepare(`
           INSERT INTO account_links (broadcaster_id, discord_user_id, kick_user_id, kick_username, linked_at_ms, updated_at_ms)
-          VALUES (?, ?, ?, ?, ?, ?)
+          SELECT ?, ?, ?, ?, ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM migration_runs
+            WHERE broadcaster_id = ? AND status = 'running' AND lease_token = ?
+              AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          )
           ON CONFLICT DO NOTHING
-        `).bind(kanal, discord, kick, nick, teraz, teraz),
+        `).bind(kanal, discord, kick, nick, teraz, teraz, kanal, leaseToken),
         db.prepare(`
           INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms)
           SELECT ?, 'links', ?, ?
@@ -407,18 +413,30 @@ export function utworzRepozytoriumD1(db) {
             SELECT 1 FROM account_links
             WHERE broadcaster_id = ? AND discord_user_id = ? AND kick_user_id = ?
           )
-        `).bind(kanal, sourceKey, teraz, kanal, discord, kick),
+          AND EXISTS (
+            SELECT 1 FROM migration_runs
+            WHERE broadcaster_id = ? AND status = 'running' AND lease_token = ?
+              AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          )
+        `).bind(kanal, sourceKey, teraz, kanal, discord, kick, kanal, leaseToken),
         db.prepare(`
-          SELECT 1 AS imported FROM migration_items
-          WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ?
-          LIMIT 1
-        `).bind(kanal, sourceKey),
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM migration_runs
+            WHERE broadcaster_id = ? AND status = 'running' AND lease_token = ?
+              AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          ) THEN (
+            SELECT 1 FROM migration_items
+            WHERE broadcaster_id = ? AND phase = 'links' AND source_key = ? LIMIT 1
+          ) ELSE -1 END AS imported
+        `).bind(kanal, leaseToken, kanal, sourceKey),
       ]);
       wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Idempotentny import powiązania (operacja ${i + 1})`));
-      return Boolean(wyniki[2]?.results?.[0]?.imported);
+      const imported = Number(wyniki[2]?.results?.[0]?.imported ?? -1);
+      if (imported < 0) throw new Error('Utracono lease migracji podczas importu powiązania.');
+      return imported === 1;
     },
 
-    async importujSubskrypcjeMigracja({ broadcasterId, sourceKey, kickUserId, kickUsername, expiresAtMs, source }) {
+    async importujSubskrypcjeMigracja({ broadcasterId, sourceKey, kickUserId, kickUsername, expiresAtMs, source, leaseToken }) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
       const nick = normalizujNick(kickUsername);
       const kickId = kickUserId == null ? null : wymagajId(kickUserId, 'ID użytkownika Kick');
@@ -426,10 +444,19 @@ export function utworzRepozytoriumD1(db) {
       if (!Number.isSafeInteger(expiry) || expiry <= 0) throw new TypeError('Nieprawidłowa data wygaśnięcia subskrypcji.');
       if (!SOURCE_TYPES.has(source)) throw new TypeError('Nieobsługiwane źródło subskrypcji.');
       if (typeof sourceKey !== 'string' || !sourceKey.startsWith('sub:') || sourceKey.length > 256) throw new TypeError('Nieprawidłowy klucz źródłowy subskrypcji.');
+      if (typeof leaseToken !== 'string' || !/^[A-Za-z0-9_-]{20,200}$/.test(leaseToken)) throw new TypeError('Nieprawidłowy token blokady migracji.');
       const teraz = Date.now();
       const klucz = kickId ? `id:${kickId}` : `name:${nick.toLowerCase()}`;
       const wyniki = await db.batch([
-        db.prepare(`INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms) VALUES (?, 'subscriptions', ?, ?)`).bind(kanal, sourceKey, teraz),
+        db.prepare(`
+          INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms)
+          SELECT ?, 'subscriptions', ?, ?
+          WHERE EXISTS (
+            SELECT 1 FROM migration_runs
+            WHERE broadcaster_id = ? AND status = 'running' AND lease_token = ?
+              AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          )
+        `).bind(kanal, sourceKey, teraz, kanal, leaseToken),
         db.prepare(`
           INSERT INTO subscriptions (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
           SELECT ?, ?, COALESCE(?, (
@@ -440,22 +467,37 @@ export function utworzRepozytoriumD1(db) {
             FROM account_links
             WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
           )), ?, ?, ?, ?
-          WHERE EXISTS (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?)
+          WHERE EXISTS (
+            SELECT 1 FROM migration_items
+            WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?
+          )
+          AND EXISTS (
+            SELECT 1 FROM migration_runs
+            WHERE broadcaster_id = ? AND status = 'running' AND lease_token = ?
+              AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          )
           ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
             kick_user_id = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN COALESCE(excluded.kick_user_id, subscriptions.kick_user_id) ELSE subscriptions.kick_user_id END,
             kick_username = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.kick_username ELSE subscriptions.kick_username END,
             expires_at_ms = MAX(subscriptions.expires_at_ms, excluded.expires_at_ms),
             source = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.source ELSE subscriptions.source END,
             updated_at_ms = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms END
-        `).bind(kanal, klucz, kickId, kanal, nick, nick, expiry, source, teraz, kanal, sourceKey),
+        `).bind(kanal, klucz, kickId, kanal, nick, nick, expiry, source, teraz, kanal, sourceKey, kanal, leaseToken),
         db.prepare(`
-          SELECT 1 AS imported FROM migration_items
-          WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?
-          LIMIT 1
-        `).bind(kanal, sourceKey),
+          SELECT CASE WHEN EXISTS (
+            SELECT 1 FROM migration_runs
+            WHERE broadcaster_id = ? AND status = 'running' AND lease_token = ?
+              AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+          ) THEN (
+            SELECT 1 FROM migration_items
+            WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ? LIMIT 1
+          ) ELSE -1 END AS imported
+        `).bind(kanal, leaseToken, kanal, sourceKey),
       ]);
       wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Idempotentny import subskrypcji (operacja ${i + 1})`));
-      return Boolean(wyniki[2]?.results?.[0]?.imported);
+      const imported = Number(wyniki[2]?.results?.[0]?.imported ?? -1);
+      if (imported < 0) throw new Error('Utracono lease migracji podczas importu subskrypcji.');
+      return imported === 1;
     },
 
 
