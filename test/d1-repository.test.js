@@ -485,6 +485,6 @@ test('zweryfikowane powiązanie uzupełnia ID historycznej subskrypcji po nicku'
   const call = db.wywolania.find((x) => x.typ === 'run');
   assert.match(call.sql, /UPDATE subscriptions/);
   assert.match(call.sql, /kick_user_id IS NULL/);
-  assert.match(call.sql, /COUNT\(DISTINCT kick_user_id\)/);
+  assert.ok(call.sql.includes('COUNT(DISTINCT kick_user_id)'));
   assert.deepEqual(call.args, ['34567', '12345', 'OldName', '12345', 'OldName']);
 });
