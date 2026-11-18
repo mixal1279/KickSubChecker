@@ -66,6 +66,12 @@ function utworzEnv({ freeze = 'false', awariaZapisu = false } = {}) {
     pobierzTokeny: () => tokeny,
     OAUTH_TOKENS: {
       getByName(nazwa) {
+        if (nazwa === 'cutover-registry') {
+          return {
+            async pobierzGlobalnyStanCutoveru() { return null; },
+            async oznaczGlobalnyCutoverD1(id) { return { broadcaster_id: id, backend: 'd1' }; },
+          };
+        }
         if (nazwa.startsWith('cutover-')) {
           const broadcasterId = nazwa.slice('cutover-'.length);
           return {
