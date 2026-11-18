@@ -110,8 +110,8 @@ function utworzKvFixture(broadcasterId, teraz) {
   for (let i = 0; i < 2; i++) {
     const discordId = String(BigInt(broadcasterId) + 100n + BigInt(i));
     const kickId = String(BigInt(broadcasterId) + 200n + BigInt(i));
-    const linkUsername = i === 0 ? subUsername : `linkuser${i}`;
     const subUsername = `subuser${i}`;
+    const linkUsername = i === 0 ? subUsername : `linkuser${i}`;
 
     dane.set(`link:discord:${discordId}`, {
       discord_id: discordId,
