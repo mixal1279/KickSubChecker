@@ -174,7 +174,15 @@ function magazynBlokadOdświeżania(env) {
   if (!env.OAUTH_TOKENS || typeof env.OAUTH_TOKENS.getByName !== 'function') {
     throw new Error('Brak bindingu OAUTH_TOKENS — odświeżanie tokenu wymaga Durable Object.');
   }
-  return env.OAUTH_TOKENS.getByName('refresh-owner');
+  const magazyn = env.OAUTH_TOKENS.getByName('refresh-owner');
+  const wymagane = [
+    'pobierzTokeny', 'zainicjujTokeny', 'zapiszTokeny',
+    'zapiszOdswiezoneTokeny', 'zarezerwujBlokade', 'zwolnijBlokade',
+  ];
+  if (wymagane.some((metoda) => typeof magazyn[metoda] !== 'function')) {
+    throw new Error('Binding OAUTH_TOKENS ma nieaktualną klasę Durable Object. Wdróż nową wersję Workera.');
+  }
+  return magazyn;
 }
 async function saveTokens(env, tokens, opcje = {}) {
   const expiresIn = Number(tokens?.expires_in);
