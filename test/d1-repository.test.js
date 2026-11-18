@@ -218,8 +218,8 @@ test('starszy event nie nadpisuje metadanych nowszej subskrypcji', async () => {
   });
   const batch = db.wywolania[0];
   assert.equal(batch.typ, 'batch');
-  const sql = batch.polecenia[1].sql;
-  assert.match(batch.polecenia[0].sql, /UPDATE subscriptions SET kick_user_id/);
+  const sql = batch.polecenia[2].sql;
+  assert.match(batch.polecenia[1].sql, /UPDATE subscriptions SET kick_user_id/);
   assert.match(sql, /WHEN excluded\.expires_at_ms >= subscriptions\.expires_at_ms/);
   assert.match(sql, /ELSE subscriptions\.source/);
   assert.match(sql, /ELSE subscriptions\.kick_username/);
@@ -440,7 +440,7 @@ test('kanał jest przygotowywany i lease przejmowany atomowo', async () => {
   }), true);
   const batch = db.wywolania.find((x) => x.typ === 'batch');
   assert.ok(batch);
-  assert.equal(batch.polecenia.length, 2);
+  assert.equal(batch.polecenia.length, 3);
   assert.match(batch.polecenia[0].sql, /INSERT INTO channels/);
   assert.match(batch.polecenia[0].sql, /NOT EXISTS/);
   assert.match(batch.polecenia[0].sql, /lease_expires_at_ms > \?/);
@@ -465,6 +465,7 @@ test('webhook nie cofa nicku ani źródła po starszym evencie', async () => {
   await repo.zakonczWebhook({
     broadcasterId: '12345',
     eventId: 'event-metadata-1',
+    leaseToken: '123e4567-e89b-12d3-a456-426614174000',
     subscriptions: [{
       kickUserId: '34567',
       kickUsername: 'OldName',
