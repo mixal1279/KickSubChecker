@@ -503,7 +503,7 @@ test('webhook nie cofa nicku ani źródła po starszym evencie', async () => {
   });
   const batch = db.wywolania.find((x) => x.typ === 'batch');
   assert.equal(batch.polecenia.length, 3);
-  assert.match(batch.polecenia[0].sql, /UPDATE webhook_events[\\s\\S]*SET lease_expires_at_ms/);
+  assert.match(batch.polecenia[0].sql, /UPDATE webhook_events[\s\S]*SET lease_expires_at_ms/);
   assert.match(batch.polecenia[1].sql, /UPDATE subscriptions SET kick_user_id/);
   assert.match(batch.polecenia[1].sql, /status = 'processing'/);
   assert.match(batch.polecenia[1].sql, /lease_token = \?/);
