@@ -33,6 +33,8 @@ Odświeżanie OAuth używa SQLite Durable Object jako źródła prawdy. Przy pie
 - `0006_subscriptions_kick_user_id_idx.sql` dodaje indeks złożony dla zapytań subskrypcji po zweryfikowanym ID Kick i dacie wygaśnięcia.
 - `0007_webhook_processing_lease.sql` dodaje token właściciela i termin lease dla przetwarzania webhooków. Każdy batch odnawia lease, a zapisy i finalizacja wymagają aktualnego tokena; spóźniona instancja nie może zakończyć ani oznaczyć jako błędnego eventu przejętego przez nowsze żądanie.
 
+Migrator KV→D1 również stosuje fencing na poziomie każdego rekordu: `INSERT` powiązania, marker idempotencji i zapis subskrypcji sprawdzają w tej samej transakcji aktywny `migration_runs.lease_token` oraz termin lease według zegara SQLite. Odczyt kontrolny w batchu rozróżnia konflikt danych od utraty lease; stary Worker przerywa pracę zamiast kontynuować zapisy po przejęciu migracji przez inną instancję.
+
 Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanych migracji — zmiany schematu wprowadzaj kolejnymi numerowanymi migracjami. Migracje należy wykonywać dokładnie raz i zapisywać ich zastosowanie w dokumentacji wdrożenia; repozytorium nie ma jeszcze automatycznego rejestru migracji.
 
 ## Budżet zapytań D1 dla migratora
