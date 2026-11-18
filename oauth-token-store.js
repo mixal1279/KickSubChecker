@@ -73,7 +73,7 @@ export class OAuthTokenStore extends DurableObject {
     return true;
   }
 
-  async zapiszOdświeżoneTokeny(dane, idBlokady, poprzedniRefreshToken) {
+  async zapiszOdswiezoneTokeny(dane, idBlokady, poprzedniRefreshToken) {
     this.#sprawdzDaneTokenow(dane);
     if (typeof idBlokady !== 'string' || idBlokady.length > 64
       || typeof poprzedniRefreshToken !== 'string' || !poprzedniRefreshToken) return false;
