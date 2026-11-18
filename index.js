@@ -127,10 +127,25 @@ async function verifyWebhookSignature(env, headers, rawBody) {
   } catch (error) { console.error('Weryfikacja webhooka nie powiodła się:', error.message); return false; }
 }
 function repozytorium(env, wymus = false) {
-  return env.DB && (wymus || env.D1_ENABLED === 'true') ? utworzRepozytoriumD1(env.DB) : null;
+  if (env.D1_ENABLED !== undefined && !['true', 'false'].includes(env.D1_ENABLED)) {
+    throw new Error('D1_ENABLED musi mieć dokładnie wartość true albo false.');
+  }
+  if (env.D1_ENABLED === 'true') {
+    if (!env.DB || typeof env.DB.prepare !== 'function' || typeof env.DB.batch !== 'function') {
+      throw new Error('D1_ENABLED=true wymaga poprawnego bindingu DB; przełączenie na KV jest zabronione.');
+    }
+    return utworzRepozytoriumD1(env.DB);
+  }
+  if (wymus && env.DB && typeof env.DB.prepare === 'function' && typeof env.DB.batch === 'function') {
+    return utworzRepozytoriumD1(env.DB);
+  }
+  return null;
 }
 function zapisyZamrozone(env) {
-  return env.MIGRATION_WRITE_FREEZE === 'true';
+  // Brak zmiennej zachowuje zgodność starszych testów/środowisk; każda jawna,
+  // nieznana wartość jest traktowana jak aktywny freeze (fail-closed).
+  return env.MIGRATION_WRITE_FREEZE !== undefined
+    && env.MIGRATION_WRITE_FREEZE !== 'false';
 }
 function odpowiedzZamrozenia() {
   return text('Operacje zapisu są czasowo wstrzymane na czas migracji backendu. Spróbuj ponownie po zakończeniu przełączenia.', 503, { 'Retry-After': '120' });
