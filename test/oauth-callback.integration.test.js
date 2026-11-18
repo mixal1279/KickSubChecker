@@ -130,6 +130,7 @@ test('freeze blokuje /authorize i /callback bez zużywania tokenów OAuth', asyn
     created_at: Date.now(),
   }, Date.now() + 600_000);
   await dodajState(env);
+  const zdarzeniaPrzed = [...env.zdarzenia];
 
   const authorize = await worker.fetch(
     request(`/authorize?link_token=${linkToken}`), env,
@@ -142,7 +143,7 @@ test('freeze blokuje /authorize i /callback bez zużywania tokenów OAuth', asyn
   assert.equal(callback.status, 503);
   assert.ok(env.wpisy.has(linkToken));
   assert.ok(env.wpisy.has(state));
-  assert.deepEqual(env.zdarzenia, []);
+  assert.deepEqual(env.zdarzenia, zdarzeniaPrzed);
 });
 
 test('/ljay-live i /ljay-live/start działają bez freeze i nie żądają channel:read', async () => {
