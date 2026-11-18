@@ -7,6 +7,7 @@ function utworzMagazyn() {
   const dane = new Map();
   const blokady = new Map();
   let tokenyWlasciciela = null;
+  let stanCutoveru = null;
   let tabelaTokenowUtworzona = false;
   let alarm = null;
   const sql = {
@@ -14,6 +15,16 @@ function utworzMagazyn() {
       const q = tekst.replace(/\\s+/g, ' ').trim().toUpperCase();
       if (q.startsWith('CREATE TABLE') || q.startsWith('CREATE INDEX')) {
         if (q.includes('OAUTH_CREDENTIALS')) tabelaTokenowUtworzona = true;
+        return { toArray: () => [] };
+      }
+      if (q.startsWith('SELECT BROADCASTER_ID, BACKEND FROM CUTOVER_STATE')) {
+        return { toArray: () => stanCutoveru ? [{ ...stanCutoveru }] : [] };
+      }
+      if (q.startsWith("INSERT INTO CUTOVER_STATE")) {
+        if (stanCutoveru && stanCutoveru.broadcaster_id !== args[0]) {
+          throw new Error('Nie można zmienić broadcaster ID przypisanego do latcha cutoveru.');
+        }
+        stanCutoveru = { broadcaster_id: args[0], backend: 'd1' };
         return { toArray: () => [] };
       }
       if (q.startsWith('SELECT ACCESS_TOKEN, REFRESH_TOKEN, EXPIRES_AT FROM OAUTH_CREDENTIALS')) {
@@ -106,12 +117,14 @@ function utworzMagazyn() {
         const kopia = structuredClone([...dane.entries()]);
         const kopiaBlokad = structuredClone([...blokady.entries()]);
         const kopiaTokenow = structuredClone(tokenyWlasciciela);
+        const kopiaCutoveru = structuredClone(stanCutoveru);
         try { return fn(); } catch (error) {
           dane.clear();
           for (const [klucz, wartosc] of kopia) dane.set(klucz, wartosc);
           blokady.clear();
           for (const [klucz, wartosc] of kopiaBlokad) blokady.set(klucz, wartosc);
           tokenyWlasciciela = kopiaTokenow;
+          stanCutoveru = kopiaCutoveru;
           throw error;
         }
       },
@@ -327,6 +340,25 @@ test('alarm usuwa wygasłe tokeny i ustawia termin kolejnego czyszczenia', async
   assert.equal(pobierzAlarm(), pierwszyAlarm, 'nowy token nie może przesuwać wcześniejszego alarmu');
   await magazyn.alarm();
   assert.equal(dane.size, 2);
+});
+
+
+test('latch cutoveru jest trwały, idempotentny i przypisany do jednego kanału', async () => {
+  const { magazyn } = utworzMagazyn();
+  assert.equal(await magazyn.pobierzStanCutoveru('123456789'), null);
+  assert.equal(await magazyn.oznaczCutoverD1('123456789'), true);
+  assert.equal(await magazyn.oznaczCutoverD1('123456789'), true);
+  assert.equal(await magazyn.pobierzStanCutoveru('123456789'), 'd1');
+  await assert.rejects(magazyn.pobierzStanCutoveru('987654321'), /innego kanału/);
+  await assert.rejects(magazyn.oznaczCutoverD1('987654321'), /innego kanału/);
+});
+
+test('latch cutoveru jest izolowany między instancjami kanałów', async () => {
+  const kanalA = utworzMagazyn().magazyn;
+  const kanalB = utworzMagazyn().magazyn;
+  await kanalA.oznaczCutoverD1('111111111');
+  assert.equal(await kanalA.pobierzStanCutoveru('111111111'), 'd1');
+  assert.equal(await kanalB.pobierzStanCutoveru('222222222'), null);
 });
 
 test('zuzyj nie zwraca danych, jeśli lease wygasł przed zatwierdzeniem', async () => {
