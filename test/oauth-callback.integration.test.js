@@ -98,6 +98,7 @@ function utworzEnv({ freeze = 'false', awariaZapisu = false } = {}) {
       async delete(key) { kv.delete(key); },
     },
     MIGRATION_WRITE_FREEZE: freeze,
+    KICK_BROADCASTER_ID: '123456789',
     KICK_CLIENT_ID: 'client-id',
     KICK_CLIENT_SECRET: 'client-secret',
     REDIRECT_URI: 'https://worker.test/callback',
