@@ -490,3 +490,27 @@ test('odczyt D1 ponawia inicjalizację kanału, gdy KV ma już broadcaster ID', 
   assert.match(zapytania[0].sql, /INSERT INTO channels/);
   assert.equal(zapytania[0].args[0], broadcasterId);
 });
+
+
+test('D1_ENABLED=true bez bindingu DB nie przełącza po cichu na KV', async () => {
+  const { env, zapisyKv } = utworzEnv();
+  env.D1_ENABLED = 'true';
+  env.DB = undefined;
+  const response = await worker.fetch(new Request(
+    'https://worker.test/api/check?username=testuser',
+    { headers: { Authorization: `Bearer ${sekret}` } },
+  ), env);
+  assert.equal(response.status, 500);
+  assert.deepEqual(zapisyKv, []);
+});
+
+test('niepoprawna wartość D1_ENABLED jest odrzucana zamiast uruchamiać backend KV', async () => {
+  const { env, zapisyKv } = utworzEnv();
+  env.D1_ENABLED = 'TRUE';
+  const response = await worker.fetch(new Request(
+    'https://worker.test/api/check?username=testuser',
+    { headers: { Authorization: `Bearer ${sekret}` } },
+  ), env);
+  assert.equal(response.status, 500);
+  assert.deepEqual(zapisyKv, []);
+});
