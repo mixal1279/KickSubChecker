@@ -30,10 +30,10 @@ Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), 
 
    ```bash
    curl -X POST 'https://TWOJ-WORKER.workers.dev/api/owner/start' \
-     -H 'Authorization: Bearer TWÓJ_SEKRET'
+     -H "Authorization: Bearer $ADMIN_API_SECRET"
    ```
    Otwórz pole `url` ze zwróconego JSON-a.
-10. Zarejestruj eventy metodą POST z nagłówkiem `Authorization: Bearer TWÓJ_SEKRET` na `https://TWOJ-WORKER.workers.dev/register-events`. Endpoint nie jest przeznaczony do otwierania w przeglądarce. Przykład:
+10. Zarejestruj eventy metodą POST z nagłówkiem `Authorization: Bearer TWÓJ_ADMIN_API_SECRET` na `https://TWOJ-WORKER.workers.dev/register-events`. Nie zapisuj `ADMIN_API_SECRET` w `.env` używanym przez bota; ustaw go tylko w środowisku administratora. Endpoint nie jest przeznaczony do otwierania w przeglądarce. Przykład:
 
    ```bash
    curl -X POST 'https://TWOJ-WORKER.workers.dev/register-events' \
