@@ -90,6 +90,16 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
 }, async () => {
   await sprawdzBazeTestowa();
 
+  const indeksId = await zapytaj(
+    "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?",
+    ['idx_subscriptions_broadcaster_user_expiry'],
+  );
+  assert.equal(indeksId.results?.length, 1, 'Migracja 0006 musi utworzyć indeks wyszukiwania subskrypcji po Kick User ID.');
+  assert.match(
+    indeksId.results[0].sql,
+    /ON subscriptions\\s*\\(broadcaster_id,\\s*kick_user_id,\\s*expires_at_ms DESC\\)\\s*WHERE kick_user_id IS NOT NULL/i,
+  );
+
   const broadcasterId = noweId();
   const discordId = noweId();
   const kickId = noweId();
