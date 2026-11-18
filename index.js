@@ -158,15 +158,21 @@ function sprawdzKonfiguracjeBackendu(env) {
   }
 }
 async function blokujPowrotDoKvPoMigracji(env, pathname) {
-  if (env.D1_ENABLED === 'true') return false;
+  if (['/', '/preview', '/api/admin/migrate-kv'].includes(pathname)) return false;
   const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
-  if (marker == null || marker === '') return false;
+  // D1 nie może zostać aktywowane bez zakończonego importu i trwałego znacznika.
+  if (env.D1_ENABLED === 'true') return marker == null || marker === '';
   // Po zakończonym imporcie KV jest już tylko kopią historyczną.
-  // Pozostawiamy dostęp do podglądu, health checku i autoryzowanego endpointu wznowienia migracji.
-  return !['/', '/preview', '/api/admin/migrate-kv'].includes(pathname);
+  return marker != null && marker !== '';
 }
 async function oznaczWymaganyBackendD1(env, broadcasterId) {
-  await env.SUBS_KV.put('config:d1_cutover_complete', String(broadcasterId));
+  const klucz = 'config:d1_cutover_complete';
+  const id = String(broadcasterId);
+  const obecny = await env.SUBS_KV.get(klucz);
+  if (obecny && obecny !== id) {
+    throw new Error('Znacznik cutoveru D1 wskazuje inny kanał Kick.');
+  }
+  if (obecny !== id) await env.SUBS_KV.put(klucz, id);
 }
 function odpowiedzZamrozenia() {
   return text('Operacje zapisu są czasowo wstrzymane na czas migracji backendu. Spróbuj ponownie po zakończeniu przełączenia.', 503, { 'Retry-After': '120' });
