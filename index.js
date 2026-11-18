@@ -191,19 +191,12 @@ async function saveTokens(env, tokens, opcje = {}) {
     throw new Error('Kick OAuth zwrócił niekompletne lub nieprawidłowe tokeny.');
   }
   const magazyn = magazynBlokadOdświeżania(env);
-  let previous = await magazyn.pobierzTokeny();
-  if (!previous && typeof tokens.refresh_token !== 'string') {
-    const legacy = await env.SUBS_KV.get('ljay:tokens', 'json');
-    if (legacy?.refresh_token) {
-      previous = await magazyn.zainicjujTokeny(legacy);
-    }
+  // Kick zwraca nowy refresh_token zarówno dla authorization_code, jak i refresh_token.
+  // Nie wolno zachowywać starego tokena po udanej rotacji, bo provider mógł go unieważnić.
+  if (typeof tokens.refresh_token !== 'string' || !tokens.refresh_token) {
+    throw new Error('Kick OAuth nie zwrócił wymaganego refresh_token.');
   }
-  const refreshToken = typeof tokens.refresh_token === 'string' && tokens.refresh_token
-    ? tokens.refresh_token
-    : previous?.refresh_token;
-  if (typeof refreshToken !== 'string' || !refreshToken) {
-    throw new Error('Brak refresh_token w odpowiedzi Kicka i w magazynie Durable Object.');
-  }
+  const refreshToken = tokens.refresh_token;
   const dane = {
     access_token: tokens.access_token,
     refresh_token: refreshToken,
