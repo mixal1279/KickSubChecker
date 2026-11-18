@@ -40,6 +40,7 @@ function utworzEnv({
     KICK_BROADCASTER_ID: broadcasterId,
     DB: db,
     D1_ENABLED: 'false',
+    MIGRATION_WRITE_FREEZE: 'true',
     SUBS_KV: {
       async get(key, type) {
         if (bladOdczytuKv) throw new Error('symulowana awaria KV get');
