@@ -67,7 +67,7 @@ Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa w
 8. W jednym kontrolowanym wdrożeniu ustaw `D1_ENABLED = "true"` i `MIGRATION_WRITE_FREEZE = "false"`. Nie zdejmuj freeze wcześniej.
 9. Zweryfikuj `/api/check`, `/api/link` oraz odbiór webhooków po przełączeniu.
 
-Endpoint migracyjny wymaga osobnego `ADMIN_API_SECRET`, niezależnego od `BOT_API_SECRET` i nieudostępnianego botowi. Nie umieszczaj sekretów w repozytorium ani w logach. Ustaw go w Cloudflare jako secret przed użyciem endpointu. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje OAuth i stan pomocniczy. Nie traktuj zgodności liczby markerów jako dowodu braku utraconych zapisów — gwarancję domknięcia luki daje wyłącznie utrzymany freeze zapisu od opróżnienia żądań in-flight do atomowego przełączenia na D1.
+Endpoint migracyjny, tworzenie linku OAuth właściciela (`/api/owner/start`) oraz rejestracja webhooków (`/register-events`) wymagają osobnego `ADMIN_API_SECRET`, niezależnego od `BOT_API_SECRET` i nieudostępnianego botowi. Nie umieszczaj sekretów w repozytorium ani w logach. Ustaw go w Cloudflare jako secret przed użyciem tych endpointów. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje OAuth i stan pomocniczy. Nie traktuj zgodności liczby markerów jako dowodu braku utraconych zapisów — gwarancję domknięcia luki daje wyłącznie utrzymany freeze zapisu od opróżnienia żądań in-flight do atomowego przełączenia na D1.
 
 
 ## Dodatkowe zabezpieczenia webhooków
