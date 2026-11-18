@@ -168,6 +168,36 @@ test('rzeczywisty D1: ograniczenia, źródła, deduplikacja i CASCADE', {
       [broadcasterId, 'system', 'integration-test', 'integration.test', '{}', teraz],
     );
 
+    // Starszy webhook z ID musi uzupełnić historyczny rekord po nicku,
+    // nie może jednak obniżyć jego nowszej daty wygaśnięcia.
+    const historyKickId = noweId();
+    const historyExpiry = teraz + 120_000;
+    await zapytaj(
+      'INSERT INTO subscriptions (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms) VALUES (?, ?, NULL, ?, ?, ?, ?)',
+      [broadcasterId, 'name:historic-user', 'historic-user', historyExpiry, 'channel.subscription.renewal', teraz],
+    );
+    await zapytaj(
+      `UPDATE subscriptions SET kick_user_id = ?
+        WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
+          AND kick_user_id IS NULL
+          AND EXISTS (
+            SELECT 1 FROM webhook_events
+            WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
+          )`,
+      [historyKickId, broadcasterId, 'historic-user', broadcasterId, 'integration-event'],
+    );
+    await zapytaj(
+      'INSERT INTO subscriptions (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [broadcasterId, `id:${historyKickId}`, historyKickId, 'historic-user', teraz + 60_000, 'channel.subscription.new', teraz + 1],
+    );
+    const historyById = await zapytaj(
+      'SELECT kick_username, expires_at_ms, source FROM subscriptions WHERE broadcaster_id = ? AND kick_user_id = ? ORDER BY expires_at_ms DESC LIMIT 1',
+      [broadcasterId, historyKickId],
+    );
+    assert.equal(historyById.results?.[0]?.kick_username, 'historic-user');
+    assert.equal(Number(historyById.results?.[0]?.expires_at_ms), historyExpiry);
+    assert.equal(historyById.results?.[0]?.source, 'channel.subscription.renewal');
+
     const linkSourceKey = `link:discord:${discordId}`;
     const linkBatch = [
       {
