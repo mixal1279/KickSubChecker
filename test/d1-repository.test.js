@@ -171,9 +171,11 @@ test('zachowuje historyczne źródło gift i akceptuje myślnik w nicku', async 
     expiresAtMs: Date.now() + 60_000,
     source: 'gift',
   });
-  assert.equal(db.wywolania[0].typ, 'run');
-  assert.equal(db.wywolania[0].args[5], 'gift');
-  assert.equal(db.wywolania[0].args[3], 'Nick-Z-Myslnikiem');
+  assert.equal(db.wywolania[0].typ, 'batch');
+  assert.equal(db.wywolania[0].polecenia.length, 2);
+  assert.match(db.wywolania[0].polecenia[0].sql, /UPDATE subscriptions SET kick_user_id/);
+  assert.equal(db.wywolania[0].polecenia[1].args[5], 'gift');
+  assert.equal(db.wywolania[0].polecenia[1].args[3], 'Nick-Z-Myslnikiem');
 });
 
 test('retencja usuwa stare webhooki niezależnie od statusu', async () => {
@@ -214,7 +216,10 @@ test('starszy event nie nadpisuje metadanych nowszej subskrypcji', async () => {
     expiresAtMs: Date.now() + 60_000,
     source: 'channel.subscription.renewal',
   });
-  const sql = db.wywolania[0].sql;
+  const batch = db.wywolania[0];
+  assert.equal(batch.typ, 'batch');
+  const sql = batch.polecenia[1].sql;
+  assert.match(batch.polecenia[0].sql, /UPDATE subscriptions SET kick_user_id/);
   assert.match(sql, /WHEN excluded\.expires_at_ms >= subscriptions\.expires_at_ms/);
   assert.match(sql, /ELSE subscriptions\.source/);
   assert.match(sql, /ELSE subscriptions\.kick_username/);
@@ -468,7 +473,10 @@ test('webhook nie cofa nicku ani źródła po starszym evencie', async () => {
     }],
   });
   const batch = db.wywolania.find((x) => x.typ === 'batch');
-  const sql = batch.polecenia[0].sql;
+  assert.equal(batch.polecenia.length, 2);
+  assert.match(batch.polecenia[0].sql, /UPDATE subscriptions SET kick_user_id/);
+  assert.match(batch.polecenia[0].sql, /status = 'processing'/);
+  const sql = batch.polecenia[1].sql;
   assert.match(sql, /WHEN excluded\.expires_at_ms >= subscriptions\.expires_at_ms/);
   assert.match(sql, /THEN excluded\.kick_username ELSE subscriptions\.kick_username/);
   assert.match(sql, /THEN excluded\.source ELSE subscriptions\.source/);
