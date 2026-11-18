@@ -218,25 +218,27 @@ async function saveTokens(env, tokens, opcje = {}) {
   }
   await magazyn.zapiszTokeny(dane);
 }
+async function pobierzTokenyWlasciciela(env) {
+  const magazyn = magazynBlokadOdświeżania(env);
+  let dane = await magazyn.pobierzTokeny();
+  if (dane) return dane;
+  // Jednorazowy, atomowy import ze starego KV. Po nim KV nie jest już źródłem prawdy.
+  const legacy = await env.SUBS_KV.get('ljay:tokens', 'json');
+  if (!legacy) return null;
+  if (typeof legacy.access_token !== 'string' || typeof legacy.refresh_token !== 'string'
+    || !Number.isSafeInteger(legacy.expires_at) || legacy.expires_at <= 0) {
+    throw new Error('Stary zapis tokenów Kick w KV jest niekompletny.');
+  }
+  dane = await magazyn.zainicjujTokeny(legacy);
+  return dane;
+}
 async function getBroadcasterAccessToken(env, timeoutMs = 10_000) {
   const blokady = magazynBlokadOdświeżania(env);
   const tokenWazny = (dane) => (
     typeof dane?.access_token === 'string' && dane.access_token
     && Number.isSafeInteger(dane.expires_at) && Date.now() < dane.expires_at - 60_000
   );
-  const pobierzZapisane = async () => {
-    let dane = await blokady.pobierzTokeny();
-    if (dane) return dane;
-    // Jednorazowy, atomowy import ze starego KV. Po nim KV nie jest już źródłem prawdy.
-    const legacy = await env.SUBS_KV.get('ljay:tokens', 'json');
-    if (!legacy) return null;
-    if (typeof legacy.access_token !== 'string' || typeof legacy.refresh_token !== 'string'
-      || !Number.isSafeInteger(legacy.expires_at) || legacy.expires_at <= 0) {
-      throw new Error('Stary zapis tokenów Kick w KV jest niekompletny.');
-    }
-    dane = await blokady.zainicjujTokeny(legacy);
-    return dane;
-  };
+  const pobierzZapisane = () => pobierzTokenyWlasciciela(env);
 
   let raw = await pobierzZapisane();
   if (!raw) throw new Error('Brak tokenów właściciela kanału. Administrator musi wygenerować link przez /api/owner/start.');
@@ -781,6 +783,10 @@ async function handleApi(request, env) {
     const tokenDoMigracji = await pobierzTokenMigracji({
       env,
       dryRun,
+      pobierzToken: async (srodowisko) => {
+        const zapis = await pobierzTokenyWlasciciela(srodowisko);
+        return zapis ? { access_token: zapis.access_token, expires_at: zapis.expires_at } : null;
+      },
       odswiezToken: (srodowisko) => getBroadcasterAccessToken(srodowisko, 10_000),
     });
     const owner = await kickCurrentUser(tokenDoMigracji, 10_000);
