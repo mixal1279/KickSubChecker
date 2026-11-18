@@ -8,6 +8,7 @@ function utworzMagazyn() {
   const blokady = new Map();
   let tokenyWlasciciela = null;
   let stanCutoveru = null;
+  let stanGlobalnyCutoveru = null;
   let tabelaTokenowUtworzona = false;
   let alarm = null;
   const sql = {
@@ -15,6 +16,16 @@ function utworzMagazyn() {
       const q = tekst.replace(/\\s+/g, ' ').trim().toUpperCase();
       if (q.startsWith('CREATE TABLE') || q.startsWith('CREATE INDEX')) {
         if (q.includes('OAUTH_CREDENTIALS')) tabelaTokenowUtworzona = true;
+        return { toArray: () => [] };
+      }
+      if (q.startsWith('SELECT BROADCASTER_ID, BACKEND FROM CUTOVER_REGISTRY')) {
+        return { toArray: () => stanGlobalnyCutoveru ? [{ ...stanGlobalnyCutoveru }] : [] };
+      }
+      if (q.startsWith("INSERT INTO CUTOVER_REGISTRY")) {
+        if (stanGlobalnyCutoveru && stanGlobalnyCutoveru.broadcaster_id !== args[0]) {
+          throw new Error('Rejestr cutoveru jest trwale przypisany do innego kanału Kick.');
+        }
+        stanGlobalnyCutoveru = { broadcaster_id: args[0], backend: 'd1' };
         return { toArray: () => [] };
       }
       if (q.startsWith('SELECT BROADCASTER_ID, BACKEND FROM CUTOVER_STATE')) {
@@ -118,6 +129,7 @@ function utworzMagazyn() {
         const kopiaBlokad = structuredClone([...blokady.entries()]);
         const kopiaTokenow = structuredClone(tokenyWlasciciela);
         const kopiaCutoveru = structuredClone(stanCutoveru);
+        const kopiaGlobalnegoCutoveru = structuredClone(stanGlobalnyCutoveru);
         try { return fn(); } catch (error) {
           dane.clear();
           for (const [klucz, wartosc] of kopia) dane.set(klucz, wartosc);
@@ -125,6 +137,7 @@ function utworzMagazyn() {
           for (const [klucz, wartosc] of kopiaBlokad) blokady.set(klucz, wartosc);
           tokenyWlasciciela = kopiaTokenow;
           stanCutoveru = kopiaCutoveru;
+          stanGlobalnyCutoveru = kopiaGlobalnegoCutoveru;
           throw error;
         }
       },
@@ -351,6 +364,21 @@ test('latch cutoveru jest trwały, idempotentny i przypisany do jednego kanału'
   assert.equal(await magazyn.pobierzStanCutoveru('123456789'), 'd1');
   await assert.rejects(magazyn.pobierzStanCutoveru('987654321'), /innego kanału/);
   await assert.rejects(magazyn.oznaczCutoverD1('987654321'), /przypisanego do latcha/);
+});
+
+test('globalny rejestr cutoveru jest trwały, idempotentny i nie pozwala zmienić kanału', async () => {
+  const { magazyn } = utworzMagazyn();
+  assert.equal(await magazyn.pobierzGlobalnyStanCutoveru(), null);
+  assert.equal(await magazyn.oznaczGlobalnyCutoverD1('123456789'), true);
+  assert.equal(await magazyn.oznaczGlobalnyCutoverD1('123456789'), true);
+  assert.deepEqual(await magazyn.pobierzGlobalnyStanCutoveru(), {
+    broadcaster_id: '123456789',
+    backend: 'd1',
+  });
+  await assert.rejects(
+    magazyn.oznaczGlobalnyCutoverD1('987654321'),
+    /trwale przypisany do innego kanału/,
+  );
 });
 
 test('latch cutoveru jest izolowany między instancjami kanałów', async () => {
