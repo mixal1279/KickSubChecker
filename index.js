@@ -956,7 +956,7 @@ async function handleApi(request, env) {
             try {
               const nowy = await repo.importujPowiazanieMigracja({
                 broadcasterId: owner.user_id, sourceKey: key.name,
-                discordUserId: discordId, kickUserId: kickId, kickUsername: username,
+                discordUserId: discordId, kickUserId: kickId, kickUsername: username, leaseToken,
               });
               if (nowy) {
                 raport.links_imported++;
@@ -1000,6 +1000,7 @@ async function handleApi(request, env) {
                 broadcasterId: owner.user_id, sourceKey: key.name,
                 kickUserId: kickId, kickUsername: username, expiresAtMs: expiry,
                 source: ['channel.subscription.new', 'channel.subscription.renewal', 'channel.subscription.gifts', 'gift', 'new', 'renewal', 'admin'].includes(record.source) ? record.source : 'admin',
+                leaseToken,
               });
               if (nowa) raport.subscriptions_imported++;
             } catch (error) {
