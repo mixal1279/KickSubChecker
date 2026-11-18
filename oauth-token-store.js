@@ -2,10 +2,12 @@
  * Shardowany magazyn jednorazowych tokenów OAuth.
  * SQLite DO zapewnia atomowy read-modify-write w transactionSync.
  */
-export class OAuthTokenStore {
-  constructor(ctx, _env) {
-    this.ctx = ctx;
-    this.sql = ctx.storage.sql;
+import { DurableObject } from 'cloudflare:workers';
+
+export class OAuthTokenStore extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.sql = this.ctx.storage.sql;
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS oauth_tokens (
         token TEXT PRIMARY KEY,
@@ -33,7 +35,11 @@ export class OAuthTokenStore {
         token, typ, JSON.stringify(dane), wygasaAt,
       );
     });
-    await this.ctx.storage.setAlarm(Date.now() + 60_000);
+    const proponowanyAlarm = Math.min(wygasaAt, Date.now() + 60_000);
+    const obecnyAlarm = await this.ctx.storage.getAlarm();
+    if (obecnyAlarm == null || proponowanyAlarm < obecnyAlarm) {
+      await this.ctx.storage.setAlarm(proponowanyAlarm);
+    }
     return true;
   }
 
@@ -48,14 +54,15 @@ export class OAuthTokenStore {
     }
   }
 
-  async zuzyj(token, typ, teraz = Date.now()) {
-    const rezerwacja = await this.zarezerwuj(token, typ, teraz, 30_000);
+  async zuzyj(token, typ) {
+    const rezerwacja = await this.zarezerwuj(token, typ, 30_000);
     if (!rezerwacja) return null;
-    await this.zakoncz(token, typ, rezerwacja.id);
+    if (!await this.zakoncz(token, typ, rezerwacja.id)) return null;
     return rezerwacja.dane;
   }
 
-  async zarezerwuj(token, typ, teraz = Date.now(), czasRezerwacji = 30_000) {
+  async zarezerwuj(token, typ, czasRezerwacji = 30_000) {
+    const teraz = Date.now();
     this.#sprawdz(token, typ);
     if (!Number.isSafeInteger(teraz) || teraz < 0
       || !Number.isSafeInteger(czasRezerwacji) || czasRezerwacji < 1_000 || czasRezerwacji > 120_000) {
