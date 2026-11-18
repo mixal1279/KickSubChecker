@@ -128,3 +128,12 @@ Tokeny właściciela kanału są przechowywane w tabeli `oauth_credentials` w SQ
 Odświeżanie odbywa się pod lease `broadcaster`. Zapis nowego zestawu tokenów jest transakcyjny: DO sprawdza, czy lease nadal należy do wywołania oraz czy zapisany refresh token jest dokładnie tym, którego użyto w żądaniu do Kick. Dopiero wtedy aktualizuje access token, refresh token i termin wygaśnięcia. Spóźniona odpowiedź po utracie lease albo zapis oparty na starym refresh tokenie jest odrzucany. Dzięki temu eventual consistency KV nie uczestniczy już w rotacji tokenów.
 
 Callback ponownej autoryzacji właściciela zapisuje tokeny bezpośrednio do DO dopiero po potwierdzeniu tożsamości i zgodności broadcaster ID. Każda odpowiedź OAuth musi zawierać nowy `refresh_token`, zgodnie z kontraktem Kick; niekompletna odpowiedź nie może nadpisać istniejących poświadczeń. Nie usuwaj starego klucza KV ręcznie przed pierwszym poprawnym odczytem po wdrożeniu. Zmiana nie wymaga ponownego OAuth, ale przed wdrożeniem należy sprawdzić binding `OAUTH_TOKENS` i migrację klasy `OAuthTokenStore` w środowisku testowym.
+
+
+## Ograniczenie spójności markera cutoveru
+
+**Bloker przed produkcyjnym cutoverem:** `config:d1_cutover_complete` w KV jest znacznikiem pomocniczym, a nie globalnym, silnie spójnym latch'em. KV zapewnia eventual consistency; odczyt w innej lokalizacji może przez pewien czas zwrócić brak lub starszą wartość po udanym zapisie. Dlatego sam marker KV nie daje formalnej gwarancji, że każda instancja Workera natychmiast zablokuje powrót do KV po przełączeniu.
+
+Do czasu wdrożenia i przetestowania silnie spójnego latch'a w Durable Object, partycjonowanego po `broadcaster_id`, **nie wykonuj produkcyjnego cutoveru**. Latch musi być źródłem prawdy dla nowych wersji Workera, a marker KV może pozostać wyłącznie kompatybilnym sygnałem dla starszych wersji. Błąd lub brak bindingu latch'a ma blokować zwykły ruch, nie otwierać ścieżki KV.
+
+Sam latch nie może ochronić starej wersji Workera, która go nie odczytuje. Procedura wdrożenia nadal musi utrzymywać `MIGRATION_WRITE_FREEZE=true`, wyłączyć wdrożenia stopniowe na czas przełączenia, odczekać na zakończenie żądań in-flight i potwierdzić, że ruch obsługuje wyłącznie wersja zgodna z D1. Po aktywacji D1 rollback aplikacji jest dozwolony tylko do wersji obsługującej D1; rollback danych wymaga backupu D1 lub kontrolowanej naprawy D1.
