@@ -29,7 +29,7 @@ function utworzMagazyn() {
         return { toArray: () => wpis && wpis.reservation_id === id && wpis.lease_until > teraz
           ? [{ reservation_id: id }] : [] };
       }
-      if (q.startsWith('UPDATE OAUTH_CREDENTIALS SET ACCESS_TOKEN = ?, REFRESH_TOKEN = ?, EXPIRES_AT = ? WHERE ID = 1 AND REFRESH_TOKEN = ? RETURNING ID')) {
+      if (q.startsWith('UPDATE OAUTH_CREDENTIALS')) {
         const [access, refresh, expires, poprzedni] = args;
         if (!tokenyWlasciciela || tokenyWlasciciela.refresh_token !== poprzedni) return { toArray: () => [] };
         tokenyWlasciciela = { access_token: access, refresh_token: refresh, expires_at: expires };
