@@ -77,7 +77,7 @@ Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), 
 Backend v2 przechowuje powiązania, subskrypcje i webhooki w D1, a autorytatywne tokeny właściciela w SQLite Durable Object. Przy pierwszym użyciu Worker atomowo importuje istniejący zapis `ljay:tokens` z KV, więc **samo przełączenie magazynu tokenów nie wymaga ponownej autoryzacji Kick**. KV pozostaje kopią legacy tylko do jednorazowego importu; rotacja tokenów nie zapisuje już do eventual-consistent KV.
 
 Szczegółowa, bezpieczna procedura znajduje się w [docs/backend-v2-migration.md](docs/backend-v2-migration.md). Najważniejsze:
-- skonfiguruj binding D1 (`DB`) i zastosuj migracje `0001` → `0002` → `0003` → `0004` → `0005` → `0006`;
+- skonfiguruj binding D1 (`DB`) i zastosuj migracje `0001` → `0002` → `0003` → `0004` → `0005` → `0006` → `0007`;
 - instalacja obsługuje jeden kanał Kick i jeden serwer Discord;
 - pozostaw `D1_ENABLED = "false"` i wykonaj dry-run endpointu `POST /api/admin/migrate-kv`;
 - przed importem włącz `MIGRATION_WRITE_FREEZE = "true"`, wdróż konfigurację i odczekaj co najmniej 2 minuty na zakończenie żądań in-flight;
