@@ -198,7 +198,7 @@ test('Worker wykrywa zmianę KICK_BROADCASTER_ID nawet gdy KV chwilowo nie zwrac
 });
 
 test('Worker blokuje ruch przy osieroconym latchu kanału bez rejestru instalacji', async () => {
-  const { env, ustawStanCutoveru } = utworzEnv();
+  const { env, ustawStanCutoveru, ustawGlobalnyStanCutoveru } = utworzEnv();
   ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
   ustawGlobalnyStanCutoveru(null);
   const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
