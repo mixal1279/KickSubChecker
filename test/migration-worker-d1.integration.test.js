@@ -279,7 +279,8 @@ test('pełny handler migracji używa KV fixture i rzeczywistej testowej D1', { s
     assert.equal(Number(markery.liczba), 4);
     assert.deepEqual(stan, { status: 'completed', phase: 'completed' });
     assert.equal(Number(obcyZakres.liczba), 0);
-    assert.deepEqual(kv.zapisy, []);
+    assert.equal(await kv.get('config:d1_cutover_complete'), broadcasterId);
+    assert.deepEqual(kv.zapisy, [{ key: 'config:d1_cutover_complete' }]);
   } finally {
     globalThis.fetch = poprzedniFetch;
     await db.prepare('DELETE FROM channels WHERE broadcaster_id = ?').bind(broadcasterId).run();
