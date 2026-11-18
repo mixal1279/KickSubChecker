@@ -36,11 +36,24 @@ function utworzEnv({
   };
 
   let aktywnaBlokada = false;
+  let tokenyWlasciciela = null;
   const env = {
     OAUTH_TOKENS: {
       getByName(nazwa) {
         assert.equal(nazwa, 'refresh-owner');
         return {
+          async pobierzTokeny() { return tokenyWlasciciela; },
+          async zainicjujTokeny(dane) {
+            if (!tokenyWlasciciela) tokenyWlasciciela = { ...dane };
+            return { ...tokenyWlasciciela };
+          },
+          async zapiszTokeny(dane) { tokenyWlasciciela = { ...dane }; return true; },
+          async zapiszOdświeżoneTokeny(dane, id, poprzedniRefreshToken) {
+            if (!aktywnaBlokada || id !== 'test-refresh-lease'
+              || tokenyWlasciciela?.refresh_token !== poprzedniRefreshToken) return false;
+            tokenyWlasciciela = { ...dane };
+            return true;
+          },
           async zarezerwujBlokade(_klucz, czas) {
             assert.ok(czas >= 20_000);
             if (aktywnaBlokada) return null;
@@ -349,8 +362,7 @@ test('import wygasłego OAuth odświeża token z timeoutem i nie przechodzi dale
       'https://id.kick.com/oauth/token',
       'https://api.kick.com/public/v1/users',
     ]);
-    assert.equal(zapisyKv.length, 1);
-    assert.equal(zapisyKv[0].operacja, 'put');
+    assert.equal(zapisyKv.length, 0, 'rotacja tokenów nie może zapisywać do eventual-consistent KV');
     assert.equal(wywolaniaD1.length, 1);
     assert.equal(wywolaniaD1[0].typ, 'prepare');
   } finally {
