@@ -251,7 +251,14 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
           ...(listComplete ? {} : { cursor: String(nastepnyOffset) }),
         };
       },
-      async put() { throw new Error('Migracja nie powinna zapisywać KV.'); },
+      async put(key, value) {
+        if (!['config:broadcaster_id', 'config:d1_cutover_complete'].includes(key)) {
+          throw new Error('Migracja nie powinna zapisywać danych biznesowych do KV.');
+        }
+        if (key === 'config:d1_cutover_complete' && value !== kanal) {
+          throw new Error('Marker cutoveru musi wskazywać właściwy kanał.');
+        }
+      },
       async delete() { throw new Error('Migracja nie powinna usuwać KV.'); },
     },
   };
