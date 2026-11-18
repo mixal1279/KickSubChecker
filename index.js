@@ -147,6 +147,16 @@ function zapisyZamrozone(env) {
   return env.MIGRATION_WRITE_FREEZE !== undefined
     && env.MIGRATION_WRITE_FREEZE !== 'false';
 }
+function sprawdzKonfiguracjeBackendu(env) {
+  if (env.D1_ENABLED !== undefined && !['true', 'false'].includes(env.D1_ENABLED)) {
+    throw new Error('D1_ENABLED musi mieć dokładnie wartość true albo false.');
+  }
+  if (env.D1_ENABLED === 'true' && (
+    !env.DB || typeof env.DB.prepare !== 'function' || typeof env.DB.batch !== 'function'
+  )) {
+    throw new Error('D1_ENABLED=true wymaga poprawnego bindingu DB; przełączenie na KV jest zabronione.');
+  }
+}
 function odpowiedzZamrozenia() {
   return text('Operacje zapisu są czasowo wstrzymane na czas migracji backendu. Spróbuj ponownie po zakończeniu przełączenia.', 503, { 'Retry-After': '120' });
 }
@@ -1251,6 +1261,7 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
+      sprawdzKonfiguracjeBackendu(env);
       if (url.pathname === '/ljay-live' || url.pathname === '/ljay-live/start') return handleLjayLive(request, env);
       if (url.pathname === '/preview') return new Response(previewPage(), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'" } });
       if (url.pathname === '/authorize') return handleAuthorize(request, env);
