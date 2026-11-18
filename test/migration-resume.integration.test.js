@@ -168,7 +168,36 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
     wpisy.set(key, { discord_id: discordId, kick_user_id: kickId, username: 'Widz' + i });
   }
 
+  let tokenyWlasciciela = null;
+  let blokadaOdswiezania = false;
   const env = {
+    OAUTH_TOKENS: {
+      getByName(nazwa) {
+        assert.equal(nazwa, 'refresh-owner');
+        return {
+          async pobierzTokeny() { return tokenyWlasciciela; },
+          async zainicjujTokeny(dane) {
+            if (!tokenyWlasciciela) tokenyWlasciciela = { ...dane };
+            return { ...tokenyWlasciciela };
+          },
+          async zapiszTokeny(dane) { tokenyWlasciciela = { ...dane }; return true; },
+          async zapiszOdswiezoneTokeny(dane) {
+            tokenyWlasciciela = { ...dane };
+            return true;
+          },
+          async zarezerwujBlokade() {
+            if (blokadaOdswiezania) return null;
+            blokadaOdswiezania = true;
+            return 'test-lease';
+          },
+          async zwolnijBlokade(_nazwa, id) {
+            if (id !== 'test-lease' || !blokadaOdswiezania) return false;
+            blokadaOdswiezania = false;
+            return true;
+          },
+        };
+      },
+    },
     BOT_API_SECRET: sekret,
     ADMIN_API_SECRET: sekretAdmina,
     KICK_BROADCASTER_ID: kanal,
