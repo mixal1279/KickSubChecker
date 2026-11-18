@@ -163,7 +163,7 @@ async function blokujPowrotDoKvPoMigracji(env, pathname) {
     return env.D1_ENABLED === 'true' ? 'd1_cutover_marker_unavailable' : null;
   }
   const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
-  if (marker == null || marker === '') {
+  if (marker == null) {
     return env.D1_ENABLED === 'true' ? 'd1_cutover_requires_completed_migration' : null;
   }
   const storedId = await env.SUBS_KV.get('config:broadcaster_id');
