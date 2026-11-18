@@ -30,6 +30,21 @@ function utworzEnv() {
   const zapisy = [];
   return {
     zapisy,
+    OAUTH_TOKENS: {
+      getByName(nazwa) {
+        assert.equal(nazwa, `cutover-${broadcasterId}`);
+        return {
+          async pobierzStanCutoveru(id) {
+            assert.equal(id, broadcasterId);
+            return null;
+          },
+          async oznaczCutoverD1(id) {
+            assert.equal(id, broadcasterId);
+            return true;
+          },
+        };
+      },
+    },
     SUBS_KV: {
       async get(klucz, typ) {
         const wartosc = dane.get(klucz) ?? null;
