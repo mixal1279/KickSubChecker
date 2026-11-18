@@ -182,9 +182,24 @@ test('pełny handler migracji używa KV fixture i rzeczywistej testowej D1', { s
   let tokenyWlasciciela = null;
   let blokadaOdswiezania = false;
   let stanCutoveru = null;
+  let stanGlobalnyCutoveru = null;
   const env = {
     OAUTH_TOKENS: {
       getByName(nazwa) {
+        if (nazwa === 'cutover-registry') {
+          return {
+            async pobierzGlobalnyStanCutoveru() {
+              return stanGlobalnyCutoveru ? { ...stanGlobalnyCutoveru } : null;
+            },
+            async oznaczGlobalnyCutoverD1(id) {
+              if (stanGlobalnyCutoveru && stanGlobalnyCutoveru.broadcaster_id !== id) {
+                throw new Error('installation broadcaster mismatch');
+              }
+              stanGlobalnyCutoveru = { broadcaster_id: id, backend: 'd1' };
+              return true;
+            },
+          };
+        }
         if (nazwa.startsWith('cutover-')) {
           const broadcasterId = nazwa.slice('cutover-'.length);
           return {
