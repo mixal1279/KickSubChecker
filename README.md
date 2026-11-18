@@ -21,7 +21,7 @@ Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), 
    npx wrangler secret put KICK_CLIENT_ID
    npx wrangler secret put KICK_CLIENT_SECRET
    npx wrangler secret put BOT_API_SECRET
-npx wrangler secret put ADMIN_API_SECRET
+   npx wrangler secret put ADMIN_API_SECRET
    ```
 
 7. Przed wdrożeniem sprawdź, czy `wrangler.toml` zawiera prawdziwe ID KV oraz właściwy `REDIRECT_URI`; wartości `REPLACE_WITH_...` są tylko placeholderami.
