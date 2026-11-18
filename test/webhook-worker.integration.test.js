@@ -177,6 +177,7 @@ test('KV webhook odrzuca prezent zbyt duży dla budżetu operacji przed zapisami
   }));
   const response = await worker.fetch(await utworzZadanie(env, {
     eventId: '01TESTEVENT0000000000000004',
+    eventType: 'channel.subscription.gifts',
     payload: {
       broadcaster: { user_id: broadcasterId, username: 'testchannel' },
       giftees,
