@@ -313,16 +313,20 @@ async function handleAuthorize(request, env) {
   }
   const verifier = randomString(64); const challenge = base64UrlEncode(await sha256(verifier)); const state = randomString(24);
   await zapiszTokenJednorazowy(env, state, 'oauth-state', { verifier, discord_id: linkDiscordId, owner: ownerFlow, created_at: Date.now() });
-  const params = new URLSearchParams({ response_type: 'code', client_id: env.KICK_CLIENT_ID, redirect_uri: env.REDIRECT_URI, scope: 'user:read events:subscribe', code_challenge: challenge, code_challenge_method: 'S256', state });
+  const scope = ownerFlow ? 'user:read events:subscribe' : 'user:read';
+  const params = new URLSearchParams({ response_type: 'code', client_id: env.KICK_CLIENT_ID, redirect_uri: env.REDIRECT_URI, scope, code_challenge: challenge, code_challenge_method: 'S256', state });
   return Response.redirect(`${KICK_AUTHORIZE_URL}?${params}`, 302);
 }
 async function handleCallback(request, env) {
   if (zapisyZamrozone(env)) return odpowiedzZamrozenia();
+  if (request.method !== 'GET') return text('Method Not Allowed', 405, { Allow: 'GET' });
   const url = new URL(request.url);
   if (url.searchParams.has('error')) return text('Logowanie Kick zostało anulowane lub odrzucone. Uruchom autoryzację ponownie.', 400);
   const code = url.searchParams.get('code');
   const state = url.searchParams.get('state');
-  if (!code || !state || state.length > 200) return text('Brak kodu OAuth lub nieprawidłowy parametr state.', 400);
+  if (!code || code.length > 2048 || !state || !/^[A-Za-z0-9_-]{20,200}$/.test(state)) {
+    return text('Brak kodu OAuth lub nieprawidłowy parametr state.', 400);
+  }
   const rezerwacja = await zarezerwujTokenOAuth(env, state);
   if (!rezerwacja || !rezerwacja.dane || Date.now() - rezerwacja.dane.created_at > TOKEN_TTL_MS) {
     return text('Link wygasł, jest nieprawidłowy lub autoryzacja jest już przetwarzana. Spróbuj ponownie za chwilę.', 400);
@@ -1178,6 +1182,7 @@ function previewPage() {
 }
 
 async function handleLjayLive(request, env) {
+  if (zapisyZamrozone(env)) return odpowiedzZamrozenia();
   if (request.method !== 'GET') return text('Method Not Allowed', 405, { Allow: 'GET' });
   const verifier = randomString(64);
   const challenge = base64UrlEncode(await sha256(verifier));
@@ -1187,7 +1192,7 @@ async function handleLjayLive(request, env) {
   });
   const params = new URLSearchParams({
     response_type: 'code', client_id: env.KICK_CLIENT_ID, redirect_uri: env.REDIRECT_URI,
-    scope: 'user:read channel:read events:subscribe', code_challenge: challenge,
+    scope: 'user:read events:subscribe', code_challenge: challenge,
     code_challenge_method: 'S256', state,
   });
   return Response.redirect(`${KICK_AUTHORIZE_URL}?${params}`, 302);
