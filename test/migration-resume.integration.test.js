@@ -122,34 +122,39 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
         }
         return [{ success: true, meta: { changes: aktywny ? 0 : 1 } }, { success: true, meta: { changes: zmiany } }];
       }
+      const leaseAktywny = (broadcasterId, leaseToken) => Boolean(
+        stan && stan.broadcaster_id === broadcasterId && stan.status === 'running'
+        && stan.lease_token === leaseToken && stan.lease_expires_at_ms > Date.now()
+      );
       for (const polecenie of polecenia) {
         if (polecenie.sql.includes('INSERT INTO account_links')) {
-          const [broadcasterId, discordId, kickId, username, linkedAt, updatedAt] = polecenie.args;
+          const [broadcasterId, discordId, kickId, username, linkedAt, updatedAt, leaseBroadcaster, leaseToken] = polecenie.args;
+          if (!leaseAktywny(leaseBroadcaster, leaseToken)) continue;
           const key = broadcasterId + '|' + discordId;
           if (!rekordy.has(key)) rekordy.set(key, { kickId, username, linkedAt, updatedAt });
         } else if (polecenie.sql.includes('INSERT OR IGNORE INTO migration_items') && polecenie.sql.includes("'links'")) {
-          const [broadcasterId, sourceKey, importedAt, checkBroadcaster, discordId, kickId] = polecenie.args;
+          const [broadcasterId, sourceKey, importedAt, checkBroadcaster, discordId, kickId, leaseBroadcaster, leaseToken] = polecenie.args;
           const link = rekordy.get(checkBroadcaster + '|' + discordId);
-          if (link?.kickId === kickId) markery.add('links|' + sourceKey);
+          if (link?.kickId === kickId && leaseAktywny(leaseBroadcaster, leaseToken)) markery.add('links|' + sourceKey);
         } else if (polecenie.sql.includes('INSERT OR IGNORE INTO migration_items') && polecenie.sql.includes("'subscriptions'")) {
-          const [broadcasterId, sourceKey] = polecenie.args;
-          markery.add('subscriptions|' + sourceKey);
+          const [broadcasterId, sourceKey, importedAt, leaseBroadcaster, leaseToken] = polecenie.args;
+          if (leaseAktywny(leaseBroadcaster, leaseToken)) markery.add('subscriptions|' + sourceKey);
         } else if (polecenie.sql.includes('INSERT INTO subscriptions')) {
-          const [broadcasterId, subscriberKey, kickId, , , username, expiry, source] = polecenie.args;
-          subskrypcjeD1.set(broadcasterId + '|' + subscriberKey, { kickId, username, expiry, source });
-        } else if (polecenie.sql.includes('SELECT 1 AS imported FROM migration_items')) {
-          // SELECT w trzecim kroku batch potwierdza marker zapisany atomowo w tej samej transakcji.
+          const [broadcasterId, subscriberKey, kickId, , , username, expiry, source, , , , leaseBroadcaster, leaseToken] = polecenie.args;
+          if (leaseAktywny(leaseBroadcaster, leaseToken)) subskrypcjeD1.set(broadcasterId + '|' + subscriberKey, { kickId, username, expiry, source });
+        } else if (polecenie.sql.includes('SELECT CASE WHEN EXISTS')) {
           continue;
         } else {
           throw new Error('Nieobsługiwane SQL batch: ' + polecenie.sql);
         }
       }
-      return polecenia.map((polecenie, i) => {
+      return polecenia.map((polecenie) => {
         const wynik = { success: true, meta: { changes: 1 }, results: [] };
-        if (polecenie.sql.includes('SELECT 1 AS imported FROM migration_items')) {
-          const [broadcasterId, sourceKey] = polecenie.args;
+        if (polecenie.sql.includes('SELECT CASE WHEN EXISTS')) {
+          const args = polecenie.args;
+          const lease = leaseAktywny(args[0], args[1]);
           const phase = polecenie.sql.includes("phase = 'links'") ? 'links' : 'subscriptions';
-          if (markery.has(phase + '|' + sourceKey)) wynik.results = [{ imported: 1 }];
+          wynik.results = [{ imported: lease && markery.has(phase + '|' + args[3]) ? 1 : (lease ? 0 : -1) }];
         }
         return wynik;
       });
