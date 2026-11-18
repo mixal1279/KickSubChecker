@@ -144,7 +144,7 @@ function utworzKvFixture(broadcasterId, teraz) {
       const keys = [...dane.keys()].filter((key) => key.startsWith(prefix)).sort();
       const offset = cursor == null ? 0 : Number(cursor);
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1) {
-        throw new Error('Nieprawidłowy cursor KV w fixture.');
+        throw new Error(`Nieprawidłowy cursor KV w fixture: cursor=${String(cursor)}, typ=${typeof cursor}, limit=${String(limit)}.`);
       }
       const page = keys.slice(offset, offset + limit);
       const nextOffset = offset + page.length;
