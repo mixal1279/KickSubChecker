@@ -135,7 +135,7 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
           const [broadcasterId, sourceKey] = polecenie.args;
           markery.add('subscriptions|' + sourceKey);
         } else if (polecenie.sql.includes('INSERT INTO subscriptions')) {
-          const [broadcasterId, subscriberKey, kickId, username, expiry, source] = polecenie.args;
+          const [broadcasterId, subscriberKey, kickId, , , username, expiry, source] = polecenie.args;
           subskrypcjeD1.set(broadcasterId + '|' + subscriberKey, { kickId, username, expiry, source });
         } else if (polecenie.sql.includes('SELECT 1 AS imported FROM migration_items')) {
           // SELECT w trzecim kroku batch potwierdza marker zapisany atomowo w tej samej transakcji.
