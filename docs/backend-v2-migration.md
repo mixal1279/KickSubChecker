@@ -73,6 +73,16 @@ Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa w
 Endpoint migracyjny, tworzenie linku OAuth właściciela (`/api/owner/start`) oraz rejestracja webhooków (`/register-events`) wymagają osobnego `ADMIN_API_SECRET`, niezależnego od `BOT_API_SECRET` i nieudostępnianego botowi. Nie umieszczaj sekretów w repozytorium ani w logach. Ustaw go w Cloudflare jako secret przed użyciem tych endpointów. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje stan PKCE, jednorazowe linki i cache klucza publicznego. Tokeny właściciela są w SQLite Durable Object; stary wpis `ljay:tokens` służy wyłącznie jako źródło jednorazowego importu, gdy magazyn DO jest pusty. Nie traktuj zgodności liczby markerów jako dowodu braku utraconych zapisów — gwarancję domknięcia luki daje wyłącznie utrzymany freeze zapisu od opróżnienia żądań in-flight do atomowego przełączenia na D1.
 
 
+## Rollback i zakaz powrotu do KV po cutoverze
+
+**Po pierwszym uruchomieniu Workera z `D1_ENABLED=true` nie wolno cofać backendu przez ustawienie `D1_ENABLED=false`.** D1 staje się wtedy źródłem prawdy. KV zawiera kopię sprzed cutoveru i nie otrzymuje już zapisów subskrypcji ani powiązań z endpointów obsługiwanych przez D1. Powrót do KV może więc zwracać nieaktualne dane i nadpisać nowszy stan.
+
+- Przed rozpoczęciem importu można wrócić do konfiguracji KV, o ile nie rozpoczęto importu i nie odblokowano zapisów po stronie KV.
+- Po rozpoczęciu importu, ale przed cutoverem, utrzymuj `MIGRATION_WRITE_FREEZE=true`. Nie wznawiaj zapisów KV na podstawie samego ustawienia `D1_ENABLED=false`. Jeśli trzeba porzucić import, najpierw ustal stan `migration_runs` i `migration_items`; reset częściowo zaimportowanych danych/markerów wymaga osobnej, kontrolowanej procedury pod freeze. Bez takiego resetu ponowny import może pominąć zmienione rekordy oznaczone już jako zaimportowane.
+- Po cutoverze rollback wersji aplikacji jest dopuszczalny wyłącznie wtedy, gdy cofana wersja nadal obsługuje D1 i aktualny schemat. Zachowaj `D1_ENABLED=true` oraz binding DB.
+- Jeśli nowa wersja aplikacji nie działa z D1, utrzymaj freeze i wdrażaj poprawkę naprzód. Odtworzenie danych wykonuj z backupu D1 lub przez kontrolowaną naprawę D1. Nie traktuj starego KV jako backupu po cutoverze.
+- Przed cutoverem wykonaj i zweryfikuj backup D1 oraz zachowaj raport migracji. Potwierdź też, że produkcyjna baza ma wszystkie migracje `0001–0007`. Nie usuwaj starych kluczy KV ani migracyjnych markerów w ramach samego przełączenia.
+
 ## Dodatkowe zabezpieczenia webhooków
 
 Worker przed zapisem zdarzenia sprawdza:
