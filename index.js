@@ -177,8 +177,13 @@ async function blokujPowrotDoKvPoMigracji(env, pathname) {
   return env.D1_ENABLED === 'true' ? null : 'd1_cutover_requires_d1_backend';
 }
 async function oznaczWymaganyBackendD1(env, broadcasterId) {
-  const klucz = 'config:d1_cutover_complete';
   const id = String(broadcasterId);
+  const zapisanyId = await env.SUBS_KV.get('config:broadcaster_id');
+  if (zapisanyId && zapisanyId !== id) {
+    throw new Error('Zapisany broadcaster ID nie zgadza się z ukończoną migracją D1.');
+  }
+  if (!zapisanyId) await env.SUBS_KV.put('config:broadcaster_id', id);
+  const klucz = 'config:d1_cutover_complete';
   const obecny = await env.SUBS_KV.get(klucz);
   if (obecny && obecny !== id) {
     throw new Error('Znacznik cutoveru D1 wskazuje inny kanał Kick.');
