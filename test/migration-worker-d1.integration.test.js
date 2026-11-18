@@ -120,7 +120,7 @@ function utworzKvFixture(broadcasterId, teraz) {
     });
     dane.set(`sub:${subUsername}`, {
       username: subUsername,
-      user_id: kickId,
+      user_id: i === 0 ? null : kickId,
       expires_at: new Date(teraz + 3_600_000 + i * 1000).toISOString(),
     });
   }
