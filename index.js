@@ -1362,6 +1362,11 @@ export default {
   },
 
   async scheduled(_event, env, ctx) {
+    const bladCutoveru = await blokujPowrotDoKvPoMigracji(env, '/scheduled');
+    if (bladCutoveru) {
+      console.error('Pominięto retencję webhooków:', bladCutoveru);
+      return;
+    }
     const repo = repozytorium(env);
     if (!repo) return;
     ctx.waitUntil(
