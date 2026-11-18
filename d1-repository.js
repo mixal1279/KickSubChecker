@@ -179,7 +179,15 @@ export function utworzRepozytoriumD1(db) {
       if (!Number.isSafeInteger(expiry) || expiry <= 0) throw new TypeError('Nieprawidłowa data wygaśnięcia subskrypcji.');
       if (!SOURCE_TYPES.has(source)) throw new TypeError('Nieobsługiwane źródło subskrypcji.');
       const klucz = kickId ? `id:${kickId}` : `name:${nick.toLowerCase()}`;
-      const wynik = await db.prepare(`
+      const polecenia = [];
+      if (kickId) {
+        polecenia.push(db.prepare(`
+          UPDATE subscriptions SET kick_user_id = ?
+          WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
+            AND kick_user_id IS NULL
+        `).bind(kickId, kanal, nick));
+      }
+      polecenia.push(db.prepare(`
         INSERT INTO subscriptions
           (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
         VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -202,8 +210,9 @@ export function utworzRepozytoriumD1(db) {
             WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
             THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms
           END
-      `).bind(kanal, klucz, kickId, nick, expiry, source, Date.now()).run();
-      sprawdzWynik(wynik, 'Zapis subskrypcji');
+      `).bind(kanal, klucz, kickId, nick, expiry, source, Date.now()));
+      const wyniki = await db.batch(polecenia);
+      wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Zapis subskrypcji (operacja ${i + 1})`));
     },
 
     async sprawdzSubskrypcje({ broadcasterId, kickUserId, kickUsername }) {
@@ -268,13 +277,27 @@ export function utworzRepozytoriumD1(db) {
         throw new TypeError('Nieprawidłowa lista subskrypcji z webhooka.');
       }
       const teraz = Date.now();
-      const polecenia = subscriptions.map((sub) => {
+      const polecenia = [];
+      for (const sub of subscriptions) {
         const nick = normalizujNick(sub.kickUsername);
         const kickId = sub.kickUserId == null ? null : wymagajId(sub.kickUserId, 'ID użytkownika Kick');
         const expiry = Number(sub.expiresAtMs);
         if (!Number.isSafeInteger(expiry) || expiry <= 0 || !SOURCE_TYPES.has(sub.source)) throw new TypeError('Nieprawidłowe dane subskrypcji.');
         const klucz = kickId ? `id:${kickId}` : `name:${nick.toLowerCase()}`;
-        return db.prepare(`
+        if (kickId) {
+          // ID z podpisanego webhooka może uzupełnić starszy rekord po nicku,
+          // ale nie zmienia jego nowszej daty ani pozostałych metadanych.
+          polecenia.push(db.prepare(`
+            UPDATE subscriptions SET kick_user_id = ?
+            WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
+              AND kick_user_id IS NULL
+              AND EXISTS (
+                SELECT 1 FROM webhook_events
+                WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
+              )
+          `).bind(kickId, kanal, nick, kanal, eventId));
+        }
+        polecenia.push(db.prepare(`
           INSERT INTO subscriptions
             (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
           SELECT ?, ?, ?, ?, ?, ?, ?
@@ -301,9 +324,9 @@ export function utworzRepozytoriumD1(db) {
               WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
               THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms
             END
-        `).bind(kanal, klucz, kickId, nick, expiry, sub.source, teraz, kanal, eventId);
-      });
-      // D1 batch ma limit liczby instrukcji; porcje są idempotentne.
+        `).bind(kanal, klucz, kickId, nick, expiry, sub.source, teraz, kanal, eventId));
+      }
+      // D1 batch ma limit liczby instrukcji; 90 instrukcji na porcję mieści do 45 odbiorców.
       // Event pozostaje processing do czasu zapisania wszystkich odbiorców.
       for (let i = 0; i < polecenia.length; i += 90) {
         const wyniki = await db.batch(polecenia.slice(i, i + 90));
