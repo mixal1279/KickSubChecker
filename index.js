@@ -176,45 +176,74 @@ function magazynBlokadOdświeżania(env) {
   }
   return env.OAUTH_TOKENS.getByName('refresh-owner');
 }
-async function saveTokens(env, tokens) {
+async function saveTokens(env, tokens, opcje = {}) {
   const expiresIn = Number(tokens?.expires_in);
-  if (typeof tokens?.access_token !== 'string' || !tokens.access_token || !Number.isFinite(expiresIn) || expiresIn <= 0) {
-    throw new Error('Kick OAuth zwrócił niekompletne tokeny.');
+  if (typeof tokens?.access_token !== 'string' || !tokens.access_token
+    || !Number.isSafeInteger(expiresIn) || expiresIn <= 0 || expiresIn > 31_536_000) {
+    throw new Error('Kick OAuth zwrócił niekompletne lub nieprawidłowe tokeny.');
   }
-  const previous = await env.SUBS_KV.get('ljay:tokens', 'json');
+  const magazyn = magazynBlokadOdświeżania(env);
+  let previous = await magazyn.pobierzTokeny();
+  if (!previous && typeof tokens.refresh_token !== 'string') {
+    const legacy = await env.SUBS_KV.get('ljay:tokens', 'json');
+    if (legacy?.refresh_token) {
+      previous = await magazyn.zainicjujTokeny(legacy);
+    }
+  }
   const refreshToken = typeof tokens.refresh_token === 'string' && tokens.refresh_token
     ? tokens.refresh_token
     : previous?.refresh_token;
   if (typeof refreshToken !== 'string' || !refreshToken) {
-    throw new Error('Brak refresh_token w odpowiedzi Kicka i w zapisanych danych.');
+    throw new Error('Brak refresh_token w odpowiedzi Kicka i w magazynie Durable Object.');
   }
-  await env.SUBS_KV.put('ljay:tokens', JSON.stringify({
+  const dane = {
     access_token: tokens.access_token,
     refresh_token: refreshToken,
     expires_at: Date.now() + expiresIn * 1000,
-  }));
+  };
+  if (opcje.idBlokady) {
+    const zapisano = await magazyn.zapiszOdświeżoneTokeny(
+      dane, opcje.idBlokady, opcje.poprzedniRefreshToken,
+    );
+    if (!zapisano) throw new Error('Odrzucono zapis tokenów: blokada wygasła lub refresh token został już zmieniony.');
+    return;
+  }
+  await magazyn.zapiszTokeny(dane);
 }
 async function getBroadcasterAccessToken(env, timeoutMs = 10_000) {
-  const pobierzZapisane = () => env.SUBS_KV.get('ljay:tokens', 'json');
+  const blokady = magazynBlokadOdświeżania(env);
   const tokenWazny = (dane) => (
     typeof dane?.access_token === 'string' && dane.access_token
-    && Number.isFinite(dane.expires_at) && Date.now() < dane.expires_at - 60_000
+    && Number.isSafeInteger(dane.expires_at) && Date.now() < dane.expires_at - 60_000
   );
+  const pobierzZapisane = async () => {
+    let dane = await blokady.pobierzTokeny();
+    if (dane) return dane;
+    // Jednorazowy, atomowy import ze starego KV. Po nim KV nie jest już źródłem prawdy.
+    const legacy = await env.SUBS_KV.get('ljay:tokens', 'json');
+    if (!legacy) return null;
+    if (typeof legacy.access_token !== 'string' || typeof legacy.refresh_token !== 'string'
+      || !Number.isSafeInteger(legacy.expires_at) || legacy.expires_at <= 0) {
+      throw new Error('Stary zapis tokenów Kick w KV jest niekompletny.');
+    }
+    dane = await blokady.zainicjujTokeny(legacy);
+    return dane;
+  };
+
   let raw = await pobierzZapisane();
   if (!raw) throw new Error('Brak tokenów właściciela kanału. Administrator musi wygenerować link przez /api/owner/start.');
   if (tokenWazny(raw)) return raw.access_token;
 
-  const blokady = magazynBlokadOdświeżania(env);
-  const czasFetch = timeoutMs > 0 ? timeoutMs : 10_000;
+  const czasFetch = Number.isFinite(timeoutMs) && timeoutMs > 0 ? Math.min(timeoutMs, 30_000) : 10_000;
   const czasOczekiwania = Date.now() + Math.min(czasFetch, 10_000) + 2_000;
   const czasLease = Math.min(Math.max(czasFetch + 10_000, 20_000), 120_000);
   let rezerwacjaId = null;
 
-  // Tylko jedna instancja Workera może użyć danego refresh_token naraz.
+  // SQLite w Durable Object jest jedynym źródłem prawdy dla rotowanych tokenów.
   while (!rezerwacjaId) {
     rezerwacjaId = await blokady.zarezerwujBlokade('broadcaster', czasLease);
     if (rezerwacjaId) break;
-    raw = await pobierzZapisane();
+    raw = await blokady.pobierzTokeny();
     if (tokenWazny(raw)) return raw.access_token;
     if (Date.now() >= czasOczekiwania) {
       throw new Error('Odświeżanie tokenu Kick jest już przetwarzane. Spróbuj ponownie za chwilę.');
@@ -223,14 +252,13 @@ async function getBroadcasterAccessToken(env, timeoutMs = 10_000) {
   }
 
   try {
-    // Po zdobyciu lease ponownie odczytujemy KV: poprzedni właściciel mógł już odświeżyć token.
     raw = await pobierzZapisane();
     if (!raw) throw new Error('Brak tokenów właściciela kanału.');
     if (tokenWazny(raw)) return raw.access_token;
     if (typeof raw.refresh_token !== 'string' || !raw.refresh_token) {
       throw new Error('Brak refresh_token właściciela kanału.');
     }
-    const opcje = {
+    const opcjeFetch = {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -239,9 +267,12 @@ async function getBroadcasterAccessToken(env, timeoutMs = 10_000) {
       }),
       signal: AbortSignal.timeout(czasFetch),
     };
-    const response = await fetch(KICK_TOKEN_URL, opcje);
+    const response = await fetch(KICK_TOKEN_URL, opcjeFetch);
     const tokens = await parseJsonResponse(response, 'Odświeżanie tokenu Kick');
-    await saveTokens(env, tokens);
+    await saveTokens(env, tokens, {
+      idBlokady: rezerwacjaId,
+      poprzedniRefreshToken: raw.refresh_token,
+    });
     return tokens.access_token;
   } finally {
     await blokady.zwolnijBlokade('broadcaster', rezerwacjaId)
@@ -355,7 +386,7 @@ async function handleCallback(request, env) {
   }
   if (!pending.owner) return text('Nieprawidłowy przepływ OAuth. Uruchom autoryzację ponownie.', 400);
   try {
-    // Zachowujemy istniejące klucze tokenów w KV — migracja D1 nie wymaga ponownego OAuth.
+    // Tokeny właściciela są przechowywane atomowo w SQLite Durable Object.
     const owner = await kickCurrentUser(tokens.access_token);
     const configuredId = String(env.KICK_BROADCASTER_ID || '').trim();
     const storedId = await env.SUBS_KV.get('config:broadcaster_id');
@@ -380,9 +411,9 @@ async function handleCallback(request, env) {
     if (repo) await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
   } catch (error) {
     console.error('Zapis autoryzacji właściciela:', error.message);
-    return text('Kick autoryzował aplikację, ale zapis konfiguracji kanału się nie powiódł. Tokeny pozostają w KV; ponów próbę konfiguracji bez ponownego OAuth.', 500);
+    return text('Kick autoryzował aplikację, ale zapis konfiguracji kanału się nie powiódł. Tokeny pozostają w Durable Object; ponów próbę konfiguracji bez ponownego OAuth.', 500);
   }
-  return text('Autoryzacja właściciela kanału zakończona. Tokeny pozostają w KV. Administrator może teraz zarejestrować webhooki.');
+  return text('Autoryzacja właściciela kanału zakończona. Tokeny są zapisane w Durable Object. Administrator może teraz zarejestrować webhooki.');
 }
 async function handleRegisterEvents(request, env) {
   if (zapisyZamrozone(env)) return json({ error: 'migration_write_freeze' }, 503, { 'Retry-After': '120' });
