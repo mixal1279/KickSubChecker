@@ -267,11 +267,11 @@ test('rotacja tokena wymaga aktywnej blokady i zgodnego poprzedniego refresh tok
   const nowe = {
     access_token: 'access-v2', refresh_token: 'refresh-v2', expires_at: Date.now() + 120_000,
   };
-  assert.equal(await magazyn.zapiszOdświeżoneTokeny(nowe, 'obcy-lease', 'refresh-v1'), false);
-  assert.equal(await magazyn.zapiszOdświeżoneTokeny(nowe, lease, 'stary-refresh'), false);
-  assert.equal(await magazyn.zapiszOdświeżoneTokeny(nowe, lease, 'refresh-v1'), true);
+  assert.equal(await magazyn.zapiszOdswiezoneTokeny(nowe, 'obcy-lease', 'refresh-v1'), false);
+  assert.equal(await magazyn.zapiszOdswiezoneTokeny(nowe, lease, 'stary-refresh'), false);
+  assert.equal(await magazyn.zapiszOdswiezoneTokeny(nowe, lease, 'refresh-v1'), true);
   assert.deepEqual(await magazyn.pobierzTokeny(), nowe);
-  assert.equal(await magazyn.zapiszOdświeżoneTokeny(pierwsze, lease, 'refresh-v1'), false);
+  assert.equal(await magazyn.zapiszOdswiezoneTokeny(pierwsze, lease, 'refresh-v1'), false);
 });
 
 test('zapis tokenów odrzuca nieprawidłowe dane', async () => {
