@@ -514,3 +514,23 @@ test('niepoprawna wartość D1_ENABLED jest odrzucana zamiast uruchamiać backen
   assert.equal(response.status, 500);
   assert.deepEqual(zapisyKv, []);
 });
+
+
+test('błędna konfiguracja D1 blokuje także endpointy tworzące nowe linki', async () => {
+  const { env, zapisyKv } = utworzEnv();
+  env.D1_ENABLED = 'true';
+  env.DB = undefined;
+  const response = await worker.fetch(new Request(
+    'https://worker.test/api/link/start',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${sekret}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ discord_id: '12345678901234567' }),
+    },
+  ), env);
+  assert.equal(response.status, 500);
+  assert.deepEqual(zapisyKv, []);
+});
