@@ -252,10 +252,10 @@ async function oznaczWymaganyBackendD1(env, broadcasterId) {
     // aby gate mógł znaleźć partycję DO mimo eventual consistency KV.
     await env.SUBS_KV.put('config:broadcaster_id', id);
   }
-  // Najpierw latch kanału, potem nieodwracalny rejestr instalacji.
-  // Jeśli drugi zapis zawiedzie, gate wykryje osierocony latch i zablokuje ruch.
-  await magazynCutoveru(env, id).oznaczCutoverD1(id);
+  // Rejestr instalacji jest punktem zatwierdzenia cutoveru.
+  // Po jego zapisie brak latcha kanału blokuje ruch aż do bezpiecznego retry.
   await rejestrCutoveru(env).oznaczGlobalnyCutoverD1(id);
+  await magazynCutoveru(env, id).oznaczCutoverD1(id);
   const klucz = 'config:d1_cutover_complete';
   const obecny = await env.SUBS_KV.get(klucz);
   if (obecny && obecny !== id) {
