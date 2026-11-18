@@ -67,7 +67,7 @@ Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa w
 5. Po wdrożeniu freeze odczekaj co najmniej 2 minuty, aby zakończyły się żądania rozpoczęte na poprzedniej wersji. Nie uruchamiaj importu przed upływem tego czasu. Kick może ponawiać webhooki odrzucone kodem 503.
 6. Uruchom import przez `POST /api/admin/migrate-kv?dry_run=false`. Endpoint odrzuci import, jeśli `MIGRATION_WRITE_FREEZE` nie jest ustawione na `true`. Import jest idempotentny i można go wznowić przy utrzymanym freeze.
 7. Porównaj liczbę rekordów, konflikty i konta testowe po nicku oraz po ID. Historyczne subskrypcje bez ID są wiązane z ID tylko przez istniejące, zweryfikowane powiązania kont.
-8. Po pomyślnej finalizacji migrator zapisuje w KV trwały znacznik `config:d1_cutover_complete` z ID kanału. Worker wymaga tego znacznika przed obsługą ruchu na D1; po jego zapisaniu blokuje zwykły ruch przy `D1_ENABLED=false`. Jeśli zapis znacznika się nie powiedzie, nie przechodź dalej — ponów autoryzowane wywołanie migratora przy utrzymanym freeze.
+8. Po pomyślnej finalizacji migrator zapisuje w KV trwały znacznik `config:d1_cutover_complete` z ID kanału. Worker wymaga tego znacznika i zgodności jego ID z `KICK_BROADCASTER_ID` lub `config:broadcaster_id` przed obsługą ruchu na D1; po jego zapisaniu blokuje zwykły ruch przy `D1_ENABLED=false`. Jeśli zapis znacznika się nie powiedzie, nie przechodź dalej — ponów autoryzowane wywołanie migratora przy utrzymanym freeze.
 9. W jednym kontrolowanym wdrożeniu ustaw `D1_ENABLED = "true"` i `MIGRATION_WRITE_FREEZE = "false"`. Nie zdejmuj freeze wcześniej. Worker odrzuci ruch aplikacyjny, jeśli D1 jest włączone bez znacznika zakończonego importu.
 10. Zweryfikuj `/api/check`, `/api/link` oraz odbiór webhooków po przełączeniu. Nie usuwaj `config:d1_cutover_complete`; jest to trwała blokada powrotu do KV.
 
@@ -76,7 +76,7 @@ Endpoint migracyjny, tworzenie linku OAuth właściciela (`/api/owner/start`) or
 
 ## Rollback i zakaz powrotu do KV po cutoverze
 
-**Worker egzekwuje kierunek cutoveru:** po zakończeniu migracji zapisuje w KV `config:d1_cutover_complete`. Gdy znacznik istnieje, aplikacja odmawia obsługi ruchu na backendzie KV. Gdy D1 jest włączone, ale znacznika brakuje, ruch aplikacyjny również jest blokowany do czasu poprawnego zakończenia migracji. Wyjątkiem jest autoryzowany endpoint migracji, który pozwala dokończyć/naprawić zapis znacznika. Nie usuwaj tego klucza podczas porządkowania KV.
+**Worker egzekwuje kierunek cutoveru:** po zakończeniu migracji zapisuje w KV `config:d1_cutover_complete`. Gdy znacznik istnieje, aplikacja odmawia obsługi ruchu na backendzie KV. Gdy D1 jest włączone, ale znacznika brakuje lub wskazuje inny broadcaster niż konfiguracja, ruch aplikacyjny również jest blokowany do czasu poprawnego zakończenia migracji albo naprawienia konfiguracji. Wyjątkiem jest autoryzowany endpoint migracji, który pozwala dokończyć/naprawić zapis znacznika. Nie usuwaj tego klucza podczas porządkowania KV.
 
 **Po pierwszym uruchomieniu Workera z `D1_ENABLED=true` nie wolno cofać backendu przez ustawienie `D1_ENABLED=false`.** D1 staje się wtedy źródłem prawdy. KV zawiera kopię sprzed cutoveru i nie otrzymuje już zapisów subskrypcji ani powiązań z endpointów obsługiwanych przez D1. Powrót do KV może więc zwracać nieaktualne dane i nadpisać nowszy stan.
 
