@@ -33,6 +33,15 @@ function utworzEnv() {
     KICK_BROADCASTER_ID: broadcasterId,
     OAUTH_TOKENS: {
       getByName(nazwa) {
+        if (nazwa === 'cutover-registry') {
+          return {
+            async pobierzGlobalnyStanCutoveru() { return null; },
+            async oznaczGlobalnyCutoverD1(id) {
+              assert.equal(id, broadcasterId);
+              return true;
+            },
+          };
+        }
         assert.equal(nazwa, `cutover-${broadcasterId}`);
         return {
           async pobierzStanCutoveru(id) {
