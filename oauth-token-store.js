@@ -28,6 +28,13 @@ export class OAuthTokenStore extends DurableObject {
       )
     `);
     this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS cutover_state (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        broadcaster_id TEXT NOT NULL,
+        backend TEXT NOT NULL CHECK (backend = 'd1')
+      )
+    `);
+    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS oauth_locks (
         lock_name TEXT PRIMARY KEY,
         reservation_id TEXT NOT NULL,
