@@ -157,6 +157,17 @@ function sprawdzKonfiguracjeBackendu(env) {
     throw new Error('D1_ENABLED=true wymaga poprawnego bindingu DB; przełączenie na KV jest zabronione.');
   }
 }
+async function blokujPowrotDoKvPoMigracji(env, pathname) {
+  if (env.D1_ENABLED === 'true') return false;
+  const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
+  if (marker == null || marker === '') return false;
+  // Po zakończonym imporcie KV jest już tylko kopią historyczną.
+  // Pozostawiamy dostęp do podglądu, health checku i autoryzowanego endpointu wznowienia migracji.
+  return !['/', '/preview', '/api/admin/migrate-kv'].includes(pathname);
+}
+async function oznaczWymaganyBackendD1(env, broadcasterId) {
+  await env.SUBS_KV.put('config:d1_cutover_complete', String(broadcasterId));
+}
 function odpowiedzZamrozenia() {
   return text('Operacje zapisu są czasowo wstrzymane na czas migracji backendu. Spróbuj ponownie po zakończeniu przełączenia.', 503, { 'Retry-After': '120' });
 }
@@ -862,6 +873,7 @@ async function handleApi(request, env) {
       if (!przejeto) {
         const stan = await repo.pobierzStanMigracji({ broadcasterId: owner.user_id });
         if (stan?.status === 'completed') {
+          await oznaczWymaganyBackendD1(env, owner.user_id);
           return json({ success: true, already_completed: true, broadcaster_id: owner.user_id });
         }
         return json({ error: 'migration_locked', retry_after_ms: Math.max(0, Number(stan?.lease_expires_at_ms || teraz) - teraz) }, 409);
@@ -934,6 +946,7 @@ async function handleApi(request, env) {
             broadcasterId: owner.user_id, leaseToken, teraz: Date.now(),
           });
           if (!zakonczono) return json({ error: 'migration_lease_lost' }, 409);
+          await oznaczWymaganyBackendD1(env, owner.user_id);
           return json({
             success: true, complete: true, phase: 'completed',
             has_more: false, processed_this_request: 0, ...raport,
@@ -1075,6 +1088,7 @@ async function handleApi(request, env) {
             broadcasterId: owner.user_id, leaseToken, teraz: Date.now(),
           });
           if (!zakonczono) return json({ error: 'migration_lease_lost' }, 409);
+          await oznaczWymaganyBackendD1(env, owner.user_id);
         }
         return json({
           success: true, complete: zakonczone,
@@ -1262,6 +1276,9 @@ export default {
     const url = new URL(request.url);
     try {
       sprawdzKonfiguracjeBackendu(env);
+      if (await blokujPowrotDoKvPoMigracji(env, url.pathname)) {
+        return json({ error: 'd1_cutover_requires_d1_backend' }, 503, { 'Retry-After': '120' });
+      }
       if (url.pathname === '/ljay-live' || url.pathname === '/ljay-live/start') return handleLjayLive(request, env);
       if (url.pathname === '/preview') return new Response(previewPage(), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'" } });
       if (url.pathname === '/authorize') return handleAuthorize(request, env);
