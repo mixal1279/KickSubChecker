@@ -30,6 +30,7 @@ function utworzEnv() {
   const zapisy = [];
   return {
     zapisy,
+    KICK_BROADCASTER_ID: broadcasterId,
     OAUTH_TOKENS: {
       getByName(nazwa) {
         assert.equal(nazwa, `cutover-${broadcasterId}`);
