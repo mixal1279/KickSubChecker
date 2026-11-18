@@ -120,6 +120,20 @@ export function utworzRepozytoriumD1(db) {
       wyniki.forEach((wynik, i) => sprawdzWynik(wynik, `Łączenie kont (operacja ${i + 1})`));
     },
 
+    async uzupelnijIdSubskrypcjiPoNicku({ broadcasterId, kickUserId, kickUsername }) {
+      const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
+      const kick = wymagajId(kickUserId, 'ID użytkownika Kick');
+      const nick = normalizujNick(kickUsername);
+      const wynik = await db.prepare(`
+        UPDATE subscriptions
+        SET kick_user_id = ?
+        WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
+          AND kick_user_id IS NULL
+      `).bind(kick, kanal, nick).run();
+      sprawdzWynik(wynik, 'Uzupełnienie ID historycznych subskrypcji');
+      return Number(wynik.meta?.changes || 0);
+    },
+
     async odlaczKonto({ broadcasterId, discordUserId, actorId }) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
       const discord = wymagajId(discordUserId, 'ID użytkownika Discord');
@@ -265,11 +279,24 @@ export function utworzRepozytoriumD1(db) {
             WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
           )
           ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
-            kick_user_id = COALESCE(excluded.kick_user_id, subscriptions.kick_user_id),
-            kick_username = excluded.kick_username,
+            kick_user_id = CASE
+              WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+              THEN COALESCE(excluded.kick_user_id, subscriptions.kick_user_id)
+              ELSE subscriptions.kick_user_id
+            END,
+            kick_username = CASE
+              WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+              THEN excluded.kick_username ELSE subscriptions.kick_username
+            END,
             expires_at_ms = MAX(subscriptions.expires_at_ms, excluded.expires_at_ms),
-            source = excluded.source,
-            updated_at_ms = excluded.updated_at_ms
+            source = CASE
+              WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+              THEN excluded.source ELSE subscriptions.source
+            END,
+            updated_at_ms = CASE
+              WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+              THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms
+            END
         `).bind(kanal, klucz, kickId, nick, expiry, sub.source, teraz, kanal, eventId);
       });
       // D1 batch ma limit liczby instrukcji; porcje są idempotentne.
@@ -340,7 +367,11 @@ export function utworzRepozytoriumD1(db) {
         db.prepare(`INSERT OR IGNORE INTO migration_items (broadcaster_id, phase, source_key, imported_at_ms) VALUES (?, 'subscriptions', ?, ?)`).bind(kanal, sourceKey, teraz),
         db.prepare(`
           INSERT INTO subscriptions (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
-          SELECT ?, ?, ?, ?, ?, ?, ?
+          SELECT ?, ?, COALESCE(?, (
+            SELECT kick_user_id FROM account_links
+            WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
+            LIMIT 1
+          )), ?, ?, ?, ?
           WHERE EXISTS (SELECT 1 FROM migration_items WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?)
           ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
             kick_user_id = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN COALESCE(excluded.kick_user_id, subscriptions.kick_user_id) ELSE subscriptions.kick_user_id END,
@@ -348,7 +379,7 @@ export function utworzRepozytoriumD1(db) {
             expires_at_ms = MAX(subscriptions.expires_at_ms, excluded.expires_at_ms),
             source = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.source ELSE subscriptions.source END,
             updated_at_ms = CASE WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms END
-        `).bind(kanal, klucz, kickId, nick, expiry, source, teraz, kanal, sourceKey),
+        `).bind(kanal, klucz, kickId, kanal, nick, nick, expiry, source, teraz, kanal, sourceKey),
         db.prepare(`
           SELECT 1 AS imported FROM migration_items
           WHERE broadcaster_id = ? AND phase = 'subscriptions' AND source_key = ?
