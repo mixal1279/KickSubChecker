@@ -187,7 +187,7 @@ function rejestrCutoveru(env) {
 async function blokujPowrotDoKvPoMigracji(env, pathname) {
   if (['/', '/preview', '/api/admin/migrate-kv'].includes(pathname)) return null;
   if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') {
-    return env.D1_ENABLED === 'true' ? 'd1_cutover_marker_unavailable' : null;
+    return 'd1_cutover_marker_unavailable';
   }
   // ID środowiska jest silnie spójnym kluczem partycji DO.
   // KV nie może być źródłem ID, bo jego odczyt może być chwilowo nieaktualny.
