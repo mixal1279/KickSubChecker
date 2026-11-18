@@ -179,7 +179,33 @@ test('pełny handler migracji używa KV fixture i rzeczywistej testowej D1', { s
   const innyBroadcasterId = (BigInt(broadcasterId) + 999n).toString();
   const db = new AdapterD1Rest();
   const kv = utworzKvFixture(broadcasterId, teraz);
+  let tokenyWlasciciela = null;
+  let blokadaOdswiezania = false;
   const env = {
+    OAUTH_TOKENS: {
+      getByName(nazwa) {
+        assert.equal(nazwa, 'refresh-owner');
+        return {
+          async pobierzTokeny() { return tokenyWlasciciela; },
+          async zainicjujTokeny(dane) {
+            if (!tokenyWlasciciela) tokenyWlasciciela = { ...dane };
+            return { ...tokenyWlasciciela };
+          },
+          async zapiszTokeny(dane) { tokenyWlasciciela = { ...dane }; return true; },
+          async zapiszOdswiezoneTokeny(dane) { tokenyWlasciciela = { ...dane }; return true; },
+          async zarezerwujBlokade() {
+            if (blokadaOdswiezania) return null;
+            blokadaOdswiezania = true;
+            return 'test-lease';
+          },
+          async zwolnijBlokade(_nazwa, id) {
+            if (id !== 'test-lease' || !blokadaOdswiezania) return false;
+            blokadaOdswiezania = false;
+            return true;
+          },
+        };
+      },
+    },
     ADMIN_API_SECRET: 'test-admin-secret',
     BOT_API_SECRET: 'test-bot-secret',
     D1_ENABLED: 'true',
