@@ -74,7 +74,7 @@ Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), 
 
 ## Backend v2: Cloudflare D1 bez ponownego OAuth
 
-Backend v2 może przejąć powiązania, subskrypcje i webhooki w D1, ale tokeny właściciela kanału nadal są przechowywane w KV pod istniejącym kluczem `ljay:tokens`. Worker potrafi odczytać tożsamość kanału z obecnego tokenu i odświeżyć go standardowym refresh tokenem. **Samo przełączenie bazy nie wymaga ponownej autoryzacji Kick.**
+Backend v2 przechowuje powiązania, subskrypcje i webhooki w D1, a autorytatywne tokeny właściciela w SQLite Durable Object. Przy pierwszym użyciu Worker atomowo importuje istniejący zapis `ljay:tokens` z KV, więc **samo przełączenie magazynu tokenów nie wymaga ponownej autoryzacji Kick**. KV pozostaje kopią legacy tylko do jednorazowego importu; rotacja tokenów nie zapisuje już do eventual-consistent KV.
 
 Szczegółowa, bezpieczna procedura znajduje się w [docs/backend-v2-migration.md](docs/backend-v2-migration.md). Najważniejsze:
 - skonfiguruj binding D1 (`DB`) i zastosuj migracje `0001` → `0002` → `0003` → `0004` → `0005` → `0006`;
@@ -85,4 +85,4 @@ Szczegółowa, bezpieczna procedura znajduje się w [docs/backend-v2-migration.m
 - wykonaj import z `?dry_run=false`, sprawdź raport, stare źródła `gift`, `new`, `renewal`, konflikty oraz statusy po nicku i ID;
 - w jednym wdrożeniu przełącz `D1_ENABLED = "true"` i `MIGRATION_WRITE_FREEZE = "false"`. Nie zdejmuj freeze przed cutoverem.
 
-Nie usuwaj KV po przełączeniu — nadal przechowuje tokeny OAuth, stan PKCE, jednorazowe linki i cache klucza publicznego. Endpoint migracyjny wymaga osobnego `ADMIN_API_SECRET`. Nie udostępniaj go botowi Discord ani nie używaj ponownie `BOT_API_SECRET`.
+Nie usuwaj KV po przełączeniu — nadal przechowuje stan PKCE, jednorazowe linki i cache klucza publicznego. Tokeny właściciela są zapisywane w SQLite Durable Object. Endpoint migracyjny wymaga osobnego `ADMIN_API_SECRET`. Nie udostępniaj go botowi Discord ani nie używaj ponownie `BOT_API_SECRET`.
