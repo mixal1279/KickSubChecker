@@ -177,9 +177,26 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
 
   let tokenyWlasciciela = null;
   let blokadaOdswiezania = false;
+  let stanCutoveru = null;
   const env = {
     OAUTH_TOKENS: {
       getByName(nazwa) {
+        if (nazwa.startsWith('cutover-')) {
+          const broadcasterId = nazwa.slice('cutover-'.length);
+          return {
+            async pobierzStanCutoveru(id) {
+              if (stanCutoveru && stanCutoveru.broadcaster_id !== id) throw new Error('broadcaster mismatch');
+              return stanCutoveru?.backend || null;
+            },
+            async oznaczCutoverD1(id) {
+              if (id !== broadcasterId || (stanCutoveru && stanCutoveru.broadcaster_id !== id)) {
+                throw new Error('broadcaster mismatch');
+              }
+              stanCutoveru = { broadcaster_id: id, backend: 'd1' };
+              return true;
+            },
+          };
+        }
         assert.equal(nazwa, 'refresh-owner');
         return {
           async pobierzTokeny() { return tokenyWlasciciela; },
