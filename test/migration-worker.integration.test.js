@@ -534,3 +534,40 @@ test('błędna konfiguracja D1 blokuje także endpointy tworzące nowe linki', a
   assert.equal(response.status, 500);
   assert.deepEqual(zapisyKv, []);
 });
+
+
+test('znacznik zakończonego cutoveru blokuje powrót do KV', async () => {
+  const { env, dane, zapisyKv, wywolaniaD1 } = utworzEnv();
+  env.D1_ENABLED = 'false';
+  env.MIGRATION_WRITE_FREEZE = 'false';
+  dane.set('config:d1_cutover_complete', broadcasterId);
+
+  const response = await worker.fetch(new Request(
+    'https://worker.test/api/check?username=testuser',
+    { headers: { Authorization: `Bearer ${sekret}` } },
+  ), env);
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'd1_cutover_requires_d1_backend' });
+  assert.deepEqual(zapisyKv, []);
+  assert.deepEqual(wywolaniaD1, []);
+});
+
+test('brak znacznika cutoveru zachowuje działanie backendu KV przed migracją', async () => {
+  const { env, dane } = utworzEnv();
+  env.D1_ENABLED = 'false';
+  env.MIGRATION_WRITE_FREEZE = 'false';
+  const poprzedniFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    data: [{ user_id: broadcasterId, username: 'testchannel' }],
+  }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  try {
+    const response = await worker.fetch(new Request(
+      'https://worker.test/api/check?username=testuser',
+      { headers: { Authorization: `Bearer ${sekret}` } },
+    ), env);
+    assert.equal(response.status, 200);
+  } finally {
+    globalThis.fetch = poprzedniFetch;
+  }
+});
