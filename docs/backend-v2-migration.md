@@ -9,7 +9,7 @@ Ta instalacja obsługuje dokładnie:
 
 Nie implementujemy multi-channel ani multi-guild. Bot zapisuje `guildId` i `roleId` w swoim lokalnym `config.json`; konfiguracja roli nie jest obecnie odczytywana z tabeli `guild_configs`. Komendy konfiguracyjne muszą blokować zmianę serwera po pierwszej konfiguracji.
 
-Dane subskrypcji, zweryfikowane powiązania kont i deduplikacja webhooków są w D1, zawsze z kluczem `broadcaster_id`. OAuth state, jednorazowe linki, klucz publiczny i tokeny właściciela pozostają w KV. Tokeny nie trafiają do D1 ani logów.
+Dane subskrypcji, zweryfikowane powiązania kont i deduplikacja webhooków są w D1, zawsze z kluczem `broadcaster_id`. OAuth state, jednorazowe linki i cache klucza publicznego pozostają w KV. Autorytatywne tokeny właściciela są przechowywane w SQLite Durable Object `refresh-owner`, a nie w KV ani D1. Tokeny nie trafiają do logów.
 
 ## Kompatybilność z działającym Workerem
 
@@ -21,7 +21,7 @@ Zmiana zachowuje endpointy:
 
 `/api/check` obsługuje zarówno `username`, jak i `user_id`. Odczyt po ID ma pierwszeństwo, a odpowiedź zachowuje format statusu `active`, `inactive` lub `unknown`. KV utrzymuje indeksy `sub:<username>` i `sub:user_id:<id>`.
 
-Odświeżanie OAuth zachowuje poprzedni refresh token, jeśli Kick nie zwróci nowego. Przy pierwszym ustaleniu kanału Worker potwierdza ID przez autoryzowany endpoint Kick. Callback właściciela nie zapisze tokenów ani konfiguracji, jeśli ID autoryzowanego konta różni się od istniejącego `config:broadcaster_id` lub `KICK_BROADCASTER_ID`. Zmiana kanału wymaga osobnej procedury.
+Odświeżanie OAuth używa SQLite Durable Object jako źródła prawdy. Przy pierwszym odczycie istniejący `ljay:tokens` z KV jest importowany atomowo tylko wtedy, gdy magazyn DO jest pusty. Rotacja wymaga aktywnej blokady oraz zgodności poprzedniego refresh tokena (CAS); zapis po wygaśnięciu lease lub z nieaktualnym tokenem jest odrzucany. Poprzedni refresh token jest zachowywany, jeśli Kick nie zwróci nowego. Przy pierwszym ustaleniu kanału Worker potwierdza ID przez autoryzowany endpoint Kick. Callback właściciela nie zapisze tokenów ani konfiguracji, jeśli ID autoryzowanego konta różni się od istniejącego `config:broadcaster_id` lub `KICK_BROADCASTER_ID`. Zmiana kanału wymaga osobnej procedury.
 
 ## Migracje SQL
 
@@ -67,7 +67,7 @@ Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa w
 8. W jednym kontrolowanym wdrożeniu ustaw `D1_ENABLED = "true"` i `MIGRATION_WRITE_FREEZE = "false"`. Nie zdejmuj freeze wcześniej.
 9. Zweryfikuj `/api/check`, `/api/link` oraz odbiór webhooków po przełączeniu.
 
-Endpoint migracyjny, tworzenie linku OAuth właściciela (`/api/owner/start`) oraz rejestracja webhooków (`/register-events`) wymagają osobnego `ADMIN_API_SECRET`, niezależnego od `BOT_API_SECRET` i nieudostępnianego botowi. Nie umieszczaj sekretów w repozytorium ani w logach. Ustaw go w Cloudflare jako secret przed użyciem tych endpointów. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje OAuth i stan pomocniczy. Nie traktuj zgodności liczby markerów jako dowodu braku utraconych zapisów — gwarancję domknięcia luki daje wyłącznie utrzymany freeze zapisu od opróżnienia żądań in-flight do atomowego przełączenia na D1.
+Endpoint migracyjny, tworzenie linku OAuth właściciela (`/api/owner/start`) oraz rejestracja webhooków (`/register-events`) wymagają osobnego `ADMIN_API_SECRET`, niezależnego od `BOT_API_SECRET` i nieudostępnianego botowi. Nie umieszczaj sekretów w repozytorium ani w logach. Ustaw go w Cloudflare jako secret przed użyciem tych endpointów. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje stan PKCE, jednorazowe linki i cache klucza publicznego. Tokeny właściciela są w SQLite Durable Object; stary wpis `ljay:tokens` służy wyłącznie jako źródło jednorazowego importu, gdy magazyn DO jest pusty. Nie traktuj zgodności liczby markerów jako dowodu braku utraconych zapisów — gwarancję domknięcia luki daje wyłącznie utrzymany freeze zapisu od opróżnienia żądań in-flight do atomowego przełączenia na D1.
 
 
 ## Dodatkowe zabezpieczenia webhooków
@@ -103,3 +103,12 @@ Po dodaniu bindingu wymagane jest wdrożenie migracji `v1` Durable Object. Stare
 - test zgodności endpointów `/ljay-live` i `/preview`.
 
 Nie wdrażaj Workera na produkcję ani nie przełączaj `D1_ENABLED` na podstawie samych testów mockowych.
+
+
+## Tokeny właściciela — Durable Object jako źródło prawdy
+
+Tokeny właściciela kanału są przechowywane w tabeli `oauth_credentials` w SQLite Durable Object o nazwie `refresh-owner`. Jest to oddzielne od D1 i od shardowanych DO używanych do jednorazowych stanów OAuth. Przy pierwszym odczycie Worker pobiera legacy `ljay:tokens` z KV i wykonuje atomowe `INSERT ... ON CONFLICT DO NOTHING`; równoległe inicjalizacje nie nadpisują już istniejących tokenów. Po udanym imporcie wszystkie odczyty i rotacje korzystają z DO.
+
+Odświeżanie odbywa się pod lease `broadcaster`. Zapis nowego zestawu tokenów jest transakcyjny: DO sprawdza, czy lease nadal należy do wywołania oraz czy zapisany refresh token jest dokładnie tym, którego użyto w żądaniu do Kick. Dopiero wtedy aktualizuje access token, refresh token i termin wygaśnięcia. Spóźniona odpowiedź po utracie lease albo zapis oparty na starym refresh tokenie jest odrzucany. Dzięki temu eventual consistency KV nie uczestniczy już w rotacji tokenów.
+
+Callback ponownej autoryzacji właściciela zapisuje tokeny bezpośrednio do DO dopiero po potwierdzeniu tożsamości i zgodności broadcaster ID. Jeżeli nowa odpowiedź OAuth nie zawiera refresh tokena, Worker może użyć poprzedniego zapisu DO; tylko przy pustym DO wykonuje jednorazowy import legacy z KV. Nie usuwaj starego klucza KV ręcznie przed pierwszym poprawnym odczytem po wdrożeniu. Zmiana nie wymaga ponownego OAuth, ale przed wdrożeniem należy sprawdzić binding `OAUTH_TOKENS` i migrację klasy `OAuthTokenStore` w środowisku testowym.
