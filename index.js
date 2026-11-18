@@ -630,9 +630,6 @@ async function handleApi(request, env) {
     }
     const dryRun = parametryDryRun[0] !== 'false';
     const parametryPaginacji = ['links_cursor', 'subscriptions_cursor', 'links_done', 'subscriptions_done'];
-    if (!dryRun && !zapisyZamrozone(env)) {
-      return json({ error: 'migration_write_freeze_required' }, 409);
-    }
     if (!dryRun && parametryPaginacji.some((parametr) => url.searchParams.has(parametr))) {
       return json({ error: 'pagination_only_available_for_dry_run' }, 400);
     }
@@ -652,6 +649,9 @@ async function handleApi(request, env) {
       (url.searchParams.get('links_done') === 'true' && url.searchParams.has('links_cursor'))
       || (url.searchParams.get('subscriptions_done') === 'true' && url.searchParams.has('subscriptions_cursor'))
     ) return json({ error: 'conflicting_pagination_parameters' }, 400);
+    if (!dryRun && !zapisyZamrozone(env)) {
+      return json({ error: 'migration_write_freeze_required' }, 409);
+    }
     const repo = repozytorium(env, true);
     if (!repo) return json({ error: 'd1_not_configured' }, 503);
     if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function' || typeof env.SUBS_KV.list !== 'function') {
