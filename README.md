@@ -66,6 +66,7 @@ npx wrangler secret put ADMIN_API_SECRET
 ## Ważne ograniczenia
 - Kick webhooki informują o nowych subskrypcjach, odnowieniach i prezentach. Przy prezentach korzystamy z `giftees` i wspólnego `expires_at` z payloadu; dokumentacja Kick odnotowywała zgłoszenia nieprawidłowych dat wygaśnięcia w niektórych webhookach, dlatego warto zweryfikować je na rzeczywistym koncie testowym. KV nie odtworzy automatycznie historii sprzed uruchomienia webhooków. Użytkownik może więc być aktywnym subskrybentem, ale nie być jeszcze znany lokalnej bazie. W takim przypadku API zwraca `unknown`, a bot nie zmienia jego roli.
 - Bot odbiera rolę tylko wtedy, gdy istnieje zapis subskrypcji z poprawną datą wygaśnięcia, która już minęła. Błąd API, brak rekordu lub niepoprawna data nie powodują odebrania roli.
+- W trybie KV webhook prezentów obsługuje maksymalnie 200 odbiorców na event (HTTP 413 powyżej limitu, bez częściowych zapisów); po przełączeniu na D1 limit wynosi 500.
 - Bot nie wykonuje automatycznego sprzątania ról osobom bez połączonego konta Kick. Takie role nie są zdejmowane tylko dlatego, że użytkownik nie ma powiązania OAuth.
 - Po wdrożeniu sprawdź testowym kontem, czy Kick wysyła webhooki do ustawionego adresu oraz czy odpowiedź rejestracji eventów jest sukcesem. Nie da się potwierdzić rzeczywistego działania integracji bez Twoich sekretów, konfiguracji Kick Developer i uprawnień serwera.
 - Nie commituj `.env`, tokenów OAuth ani sekretów. Jeśli wcześniejsze sekrety były publiczne, wygeneruj nowe.
