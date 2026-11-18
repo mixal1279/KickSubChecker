@@ -20,7 +20,7 @@ MIGRATION_WRITE_FREEZE = "false" # Set true, deploy and drain in-flight writes b
 # npx wrangler secret put BOT_API_SECRET
 # npx wrangler secret put ADMIN_API_SECRET (unikalny, nieudostępniany botowi)
 
-# D1 is enabled only after creating the database and replacing the placeholders.
+# Existing D1 target database. Apply all numbered SQL migrations before enabling D1_ENABLED.
 [[d1_databases]]
 binding = "DB"
 database_name = "kick-sub-checker"
