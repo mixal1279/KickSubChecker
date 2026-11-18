@@ -47,6 +47,37 @@ test('brak ADMIN_API_SECRET odmawia migracji przed dostępem do usług', async (
 });
 
 
+test('sekret bota nie pozwala tworzyć administracyjnych linków OAuth właściciela', async () => {
+  const response = await worker.fetch(new Request('https://worker.test/api/owner/start', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer bot-secret' },
+  }), { BOT_API_SECRET: 'bot-secret' });
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: 'unauthorized' });
+});
+
+test('sekret bota nie pozwala rejestrować webhooków Kick', async () => {
+  const response = await worker.fetch(new Request('https://worker.test/register-events', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer bot-secret' },
+  }), { BOT_API_SECRET: 'bot-secret' });
+
+  assert.equal(response.status, 401);
+  assert.deepEqual(await response.json(), { error: 'unauthorized' });
+});
+
+test('ADMIN_API_SECRET autoryzuje tworzenie linku OAuth właściciela', async () => {
+  const response = await worker.fetch(new Request('https://worker.test/api/owner/start', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer admin-secret' },
+  }), { ADMIN_API_SECRET: 'admin-secret' });
+
+  // Autoryzacja przechodzi; brak Durable Object zatrzymuje żądanie przed utworzeniem linku.
+  assert.equal(response.status, 500);
+  assert.deepEqual(await response.json(), { error: 'internal_error' });
+});
+
 test('migrator odrzuca nieobsługiwane parametry query', async () => {
   const response = await worker.fetch(new Request(workerUrl + '?broadcaster_id=999999999', {
     method: 'POST',
