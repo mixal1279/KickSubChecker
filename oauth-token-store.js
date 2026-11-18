@@ -20,6 +20,14 @@ export class OAuthTokenStore extends DurableObject {
     `);
     this.sql.exec('CREATE INDEX IF NOT EXISTS idx_oauth_tokens_expiry ON oauth_tokens(wygasa_at)');
     this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_credentials (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        access_token TEXT NOT NULL,
+        refresh_token TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS oauth_locks (
         lock_name TEXT PRIMARY KEY,
         reservation_id TEXT NOT NULL,
