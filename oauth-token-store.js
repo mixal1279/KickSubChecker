@@ -35,6 +35,13 @@ export class OAuthTokenStore extends DurableObject {
       )
     `);
     this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS cutover_registry (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        broadcaster_id TEXT NOT NULL,
+        backend TEXT NOT NULL CHECK (backend = 'd1')
+      )
+    `);
+    this.sql.exec(`
       CREATE TABLE IF NOT EXISTS oauth_locks (
         lock_name TEXT PRIMARY KEY,
         reservation_id TEXT NOT NULL,
@@ -243,6 +250,35 @@ export class OAuthTokenStore extends DurableObject {
       throw new Error('Durable Object cutoveru jest przypisany do innego kanału Kick.');
     }
     return wpis.backend;
+  }
+
+  async pobierzGlobalnyStanCutoveru() {
+    const wpis = this.sql.exec(
+      'SELECT broadcaster_id, backend FROM cutover_registry WHERE id = 1',
+    ).toArray()[0];
+    return wpis ? { broadcaster_id: wpis.broadcaster_id, backend: wpis.backend } : null;
+  }
+
+  async oznaczGlobalnyCutoverD1(broadcasterId) {
+    if (typeof broadcasterId !== 'string' || !/^[0-9]{1,32}$/.test(broadcasterId)) {
+      throw new TypeError('Nieprawidłowy broadcaster ID dla rejestru cutoveru.');
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const obecny = this.sql.exec(
+        'SELECT broadcaster_id, backend FROM cutover_registry WHERE id = 1',
+      ).toArray()[0];
+      if (obecny && obecny.broadcaster_id !== broadcasterId) {
+        throw new Error('Rejestr cutoveru jest trwale przypisany do innego kanału Kick.');
+      }
+      if (obecny?.backend === 'd1') return true;
+      this.sql.exec(
+        `INSERT INTO cutover_registry (id, broadcaster_id, backend)
+         VALUES (1, ?, 'd1')
+         ON CONFLICT(id) DO UPDATE SET backend = 'd1'`,
+        broadcasterId,
+      );
+      return true;
+    });
   }
 
   async oznaczCutoverD1(broadcasterId) {
