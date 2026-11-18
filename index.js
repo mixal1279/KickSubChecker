@@ -170,6 +170,12 @@ async function pobierzBroadcasterId(env) {
   if (repo) await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
   return owner.user_id;
 }
+function magazynBlokadOdświeżania(env) {
+  if (!env.OAUTH_TOKENS || typeof env.OAUTH_TOKENS.getByName !== 'function') {
+    throw new Error('Brak bindingu OAUTH_TOKENS — odświeżanie tokenu wymaga Durable Object.');
+  }
+  return env.OAUTH_TOKENS.getByName('refresh-owner');
+}
 async function saveTokens(env, tokens) {
   const expiresIn = Number(tokens?.expires_in);
   if (typeof tokens?.access_token !== 'string' || !tokens.access_token || !Number.isFinite(expiresIn) || expiresIn <= 0) {
@@ -189,21 +195,58 @@ async function saveTokens(env, tokens) {
   }));
 }
 async function getBroadcasterAccessToken(env, timeoutMs = 10_000) {
-  const raw = await env.SUBS_KV.get('ljay:tokens', 'json');
+  const pobierzZapisane = () => env.SUBS_KV.get('ljay:tokens', 'json');
+  const tokenWazny = (dane) => (
+    typeof dane?.access_token === 'string' && dane.access_token
+    && Number.isFinite(dane.expires_at) && Date.now() < dane.expires_at - 60_000
+  );
+  let raw = await pobierzZapisane();
   if (!raw) throw new Error('Brak tokenów właściciela kanału. Administrator musi wygenerować link przez /api/owner/start.');
-  if (Date.now() < raw.expires_at - 60_000) return raw.access_token;
-  const opcje = {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'refresh_token', refresh_token: raw.refresh_token,
-      client_id: env.KICK_CLIENT_ID, client_secret: env.KICK_CLIENT_SECRET,
-    }),
-  };
-  if (timeoutMs > 0) opcje.signal = AbortSignal.timeout(timeoutMs);
-  const response = await fetch(KICK_TOKEN_URL, opcje);
-  const tokens = await parseJsonResponse(response, 'Odświeżanie tokenu Kick');
-  await saveTokens(env, tokens); return tokens.access_token;
+  if (tokenWazny(raw)) return raw.access_token;
+
+  const blokady = magazynBlokadOdświeżania(env);
+  const czasFetch = timeoutMs > 0 ? timeoutMs : 10_000;
+  const czasOczekiwania = Date.now() + Math.min(czasFetch, 10_000) + 2_000;
+  const czasLease = Math.min(Math.max(czasFetch + 10_000, 20_000), 120_000);
+  let rezerwacjaId = null;
+
+  // Tylko jedna instancja Workera może użyć danego refresh_token naraz.
+  while (!rezerwacjaId) {
+    rezerwacjaId = await blokady.zarezerwujBlokade('broadcaster', czasLease);
+    if (rezerwacjaId) break;
+    raw = await pobierzZapisane();
+    if (tokenWazny(raw)) return raw.access_token;
+    if (Date.now() >= czasOczekiwania) {
+      throw new Error('Odświeżanie tokenu Kick jest już przetwarzane. Spróbuj ponownie za chwilę.');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+
+  try {
+    // Po zdobyciu lease ponownie odczytujemy KV: poprzedni właściciel mógł już odświeżyć token.
+    raw = await pobierzZapisane();
+    if (!raw) throw new Error('Brak tokenów właściciela kanału.');
+    if (tokenWazny(raw)) return raw.access_token;
+    if (typeof raw.refresh_token !== 'string' || !raw.refresh_token) {
+      throw new Error('Brak refresh_token właściciela kanału.');
+    }
+    const opcje = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        grant_type: 'refresh_token', refresh_token: raw.refresh_token,
+        client_id: env.KICK_CLIENT_ID, client_secret: env.KICK_CLIENT_SECRET,
+      }),
+      signal: AbortSignal.timeout(czasFetch),
+    };
+    const response = await fetch(KICK_TOKEN_URL, opcje);
+    const tokens = await parseJsonResponse(response, 'Odświeżanie tokenu Kick');
+    await saveTokens(env, tokens);
+    return tokens.access_token;
+  } finally {
+    await blokady.zwolnijBlokade('broadcaster', rezerwacjaId)
+      .catch((error) => console.error('Zwolnienie blokady odświeżania OAuth:', error.message));
+  }
 }
 async function kickCurrentUser(accessToken, timeoutMs = 10_000) {
   const opcje = { headers: { Authorization: `Bearer ${accessToken}` } };
