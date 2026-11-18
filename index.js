@@ -344,7 +344,7 @@ async function handleCallback(request, env) {
 async function handleRegisterEvents(request, env) {
   if (zapisyZamrozone(env)) return json({ error: 'migration_write_freeze' }, 503, { 'Retry-After': '120' });
   if (request.method !== 'POST') return json({ error: 'method_not_allowed' }, 405, { Allow: 'POST' });
-  if (!await bearerAuthorized(request, env)) return json({ error: 'unauthorized' }, 401);
+  if (!await adminBearerAuthorized(request, env)) return json({ error: 'unauthorized' }, 401);
   try {
     const broadcasterId = await pobierzBroadcasterId(env);
     const broadcasterNumber = Number(broadcasterId);
@@ -584,7 +584,7 @@ async function saveSubscription(env, subscription) {
 
 async function handleApi(request, env) {
   const url = new URL(request.url);
-  const administracyjny = url.pathname === '/api/admin/migrate-kv';
+  const administracyjny = url.pathname === '/api/admin/migrate-kv' || url.pathname === '/api/owner/start';
   const autoryzowany = administracyjny
     ? await adminBearerAuthorized(request, env)
     : await bearerAuthorized(request, env);
