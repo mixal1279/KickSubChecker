@@ -22,6 +22,7 @@ function utworzEnv({
     expires_at: tokenWazny ? Date.now() + 300_000 : Date.now() - 1,
   });
   if (storedBroadcasterId !== null) dane.set('config:broadcaster_id', storedBroadcasterId);
+  if (storedBroadcasterId !== null) dane.set('config:d1_cutover_complete', storedBroadcasterId);
   if (storedBroadcasterId !== null) dane.set('config:broadcaster_username', 'testchannel');
 
   const db = {
