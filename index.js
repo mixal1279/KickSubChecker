@@ -127,7 +127,7 @@ function repozytorium(env, wymus = false) {
   return env.DB && (wymus || env.D1_ENABLED === 'true') ? utworzRepozytoriumD1(env.DB) : null;
 }
 function zapisyZamrozone(env) {
-  return env.MIGRATION_WRITE_FREEZE === 'true' && env.D1_ENABLED !== 'true';
+  return env.MIGRATION_WRITE_FREEZE === 'true';
 }
 function odpowiedzZamrozenia() {
   return text('Operacje zapisu są czasowo wstrzymane na czas migracji backendu. Spróbuj ponownie po zakończeniu przełączenia.', 503, { 'Retry-After': '120' });
