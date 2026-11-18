@@ -258,14 +258,18 @@ test('pełny handler migracji używa KV fixture i rzeczywistej testowej D1', { s
     globalThis.fetch = poprzedniFetch;
     await db.prepare('DELETE FROM channels WHERE broadcaster_id = ?').bind(broadcasterId).run();
 
-    const tabele = [
-      'guild_configs', 'account_links', 'subscriptions', 'webhook_events',
-      'audit_log', 'migration_runs', 'migration_items', 'channels',
+    const zapytaniaSprzatania = [
+      ['guild_configs', 'SELECT COUNT(*) AS liczba FROM guild_configs WHERE broadcaster_id = ?'],
+      ['account_links', 'SELECT COUNT(*) AS liczba FROM account_links WHERE broadcaster_id = ?'],
+      ['subscriptions', 'SELECT COUNT(*) AS liczba FROM subscriptions WHERE broadcaster_id = ?'],
+      ['webhook_events', 'SELECT COUNT(*) AS liczba FROM webhook_events WHERE broadcaster_id = ?'],
+      ['audit_log', 'SELECT COUNT(*) AS liczba FROM audit_log WHERE broadcaster_id = ?'],
+      ['migration_runs', 'SELECT COUNT(*) AS liczba FROM migration_runs WHERE broadcaster_id = ?'],
+      ['migration_items', 'SELECT COUNT(*) AS liczba FROM migration_items WHERE broadcaster_id = ?'],
+      ['channels', 'SELECT COUNT(*) AS liczba FROM channels WHERE broadcaster_id = ?'],
     ];
-    for (const tabela of tabele) {
-      const wynik = await db.prepare(
-        `SELECT COUNT(*) AS liczba FROM ${tabela} WHERE broadcaster_id = ?`,
-      ).bind(broadcasterId).first();
+    for (const [tabela, sql] of zapytaniaSprzatania) {
+      const wynik = await db.prepare(sql).bind(broadcasterId).first();
       assert.equal(Number(wynik?.liczba || 0), 0, `Pozostały rekordy w tabeli ${tabela}.`);
     }
   }
