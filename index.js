@@ -479,13 +479,46 @@ async function handleRegisterEvents(request, env) {
     return json({ error: 'registration_failed' }, 502);
   }
 }
+async function odczytajBodyZLimitem(request, limitBajtow) {
+  if (!request.body) return '';
+  const reader = request.body.getReader();
+  const fragmenty = [];
+  let rozmiar = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      rozmiar += value.byteLength;
+      if (rozmiar > limitBajtow) {
+        await reader.cancel();
+        return null;
+      }
+      fragmenty.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const dane = new Uint8Array(rozmiar);
+  let offset = 0;
+  for (const fragment of fragmenty) {
+    dane.set(fragment, offset);
+    offset += fragment.byteLength;
+  }
+  return new TextDecoder('utf-8', { fatal: true }).decode(dane);
+}
+
 async function handleWebhook(request, env) {
   if (zapisyZamrozone(env)) return text('Migration write freeze', 503, { 'Retry-After': '120' });
   if (request.method !== 'POST') return text('Method Not Allowed', 405);
   const declaredLength = Number(request.headers.get('Content-Length') || 0);
   if (Number.isFinite(declaredLength) && declaredLength > 256_000) return text('Payload Too Large', 413);
-  const rawBody = await request.text();
-  if (new TextEncoder().encode(rawBody).byteLength > 256_000) return text('Payload Too Large', 413);
+  let rawBody;
+  try {
+    rawBody = await odczytajBodyZLimitem(request, 256_000);
+  } catch {
+    return text('Invalid request body', 400);
+  }
+  if (rawBody === null) return text('Payload Too Large', 413);
   const verification = await verifyWebhookSignature(env, request.headers, rawBody);
   if (!verification || verification.valid !== true) return text('Invalid signature or stale event', 401);
 
