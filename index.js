@@ -302,6 +302,10 @@ async function handleCallback(request, env) {
         if (previous?.username && previous.username.toLowerCase() !== username) await env.SUBS_KV.delete(`link:kick:${previous.username.toLowerCase()}`);
         await env.SUBS_KV.put(`link:discord:${pending.discord_id}`, JSON.stringify(record));
         await env.SUBS_KV.put(`link:kick:${username}`, JSON.stringify(record));
+        // Zweryfikowane OAuth może bezpiecznie uzupełnić ID historycznej subskrypcji.
+        await uzupelnijIdSubskrypcjiPoNickuKV(env, {
+          kickUserId: user.user_id, kickUsername: username,
+        });
       }
       return text(`Połączono konto Kick @${username}. Możesz wrócić na Discorda; rola zostanie zsynchronizowana w ciągu 10 minut.`);
     } catch (error) { console.error('Błąd łączenia konta Kick:', error.message); return text('Nie udało się zweryfikować konta Kick. Spróbuj ponownie.', 502); }
@@ -521,32 +525,61 @@ async function handleWebhook(request, env) {
   return text('OK');
 }
 
+async function zapiszIndeksSubskrypcjiPoId(env, record) {
+  if (!/^[0-9]{1,32}$/.test(String(record?.user_id || ''))) return;
+  const userIdKey = `sub:user_id:${record.user_id}`;
+  const oldById = await env.SUBS_KV.get(userIdKey, 'json');
+  const oldByIdExpiry = Date.parse(oldById?.expires_at || '');
+  const recordExpiry = Date.parse(record.expires_at);
+  if (!Number.isFinite(oldByIdExpiry) || recordExpiry >= oldByIdExpiry) {
+    await env.SUBS_KV.put(userIdKey, JSON.stringify(record));
+  }
+}
+
+async function uzupelnijIdSubskrypcjiPoNickuKV(env, { kickUserId, kickUsername }) {
+  const kickId = String(kickUserId ?? '');
+  if (!/^[0-9]{1,32}$/.test(kickId) || typeof kickUsername !== 'string' || !USERNAME_RE.test(kickUsername)) return false;
+  const key = `sub:${kickUsername.toLowerCase()}`;
+  const old = await env.SUBS_KV.get(key, 'json');
+  if (!old || typeof old.expires_at !== 'string' || !Number.isFinite(Date.parse(old.expires_at))) return false;
+  const existingId = String(old.user_id || '');
+  if (existingId && existingId !== kickId) return false;
+  const record = { ...old, user_id: kickId };
+  await env.SUBS_KV.put(key, JSON.stringify(record));
+  await zapiszIndeksSubskrypcjiPoId(env, record);
+  return true;
+}
+
 async function saveSubscription(env, subscription) {
   const username = subscription.username.trim();
   const key = `sub:${username.toLowerCase()}`;
   const old = await env.SUBS_KV.get(key, 'json');
   const expiry = Date.parse(subscription.expires_at);
   if (!Number.isFinite(expiry)) throw new TypeError('Nieprawidłowa data wygaśnięcia subskrypcji.');
-  const userId = String(subscription.user_id ?? old?.user_id ?? '');
-  const record = {
-    user_id: /^[0-9]{1,32}$/.test(userId) ? userId : '',
-    username,
-    expires_at: subscription.expires_at,
-    source: subscription.source,
-    updated_at: new Date().toISOString(),
-  };
-  // Nie pozwalamy starszemu eventowi cofnąć nowszej subskrypcji.
-  if (!old || !Number.isFinite(Date.parse(old.expires_at)) || expiry >= Date.parse(old.expires_at)) {
-    await env.SUBS_KV.put(key, JSON.stringify(record));
-    if (record.user_id) {
-      const userIdKey = `sub:user_id:${record.user_id}`;
-      const oldById = await env.SUBS_KV.get(userIdKey, 'json');
-      const oldByIdExpiry = Date.parse(oldById?.expires_at || '');
-      if (!Number.isFinite(oldByIdExpiry) || expiry >= oldByIdExpiry) {
-        await env.SUBS_KV.put(userIdKey, JSON.stringify(record));
+  const oldExpiry = Date.parse(old?.expires_at || '');
+  const nowszyEvent = !old || !Number.isFinite(oldExpiry) || expiry >= oldExpiry;
+  const incomingUserId = String(subscription.user_id ?? '');
+  const oldUserId = String(old?.user_id || '');
+  const poprawnyIncomingId = /^[0-9]{1,32}$/.test(incomingUserId);
+  const userId = nowszyEvent
+    ? (poprawnyIncomingId ? incomingUserId : oldUserId)
+    : (!oldUserId && poprawnyIncomingId ? incomingUserId : oldUserId);
+  const record = nowszyEvent
+    ? {
+        user_id: /^[0-9]{1,32}$/.test(userId) ? userId : '',
+        username,
+        expires_at: subscription.expires_at,
+        source: subscription.source,
+        updated_at: new Date().toISOString(),
       }
-    }
+    : { ...old, user_id: /^[0-9]{1,32}$/.test(userId) ? userId : '' };
+
+  // Starszy event nie cofa stanu subskrypcji, ale może uzupełnić brakujące,
+  // stabilne Kick User ID potrzebne do bezpiecznego wyszukiwania po ID.
+  if (nowszyEvent || record.user_id !== oldUserId) {
+    await env.SUBS_KV.put(key, JSON.stringify(record));
   }
+  await zapiszIndeksSubskrypcjiPoId(env, record);
 }
 
 async function handleApi(request, env) {
