@@ -349,7 +349,7 @@ test('latch cutoveru jest trwały, idempotentny i przypisany do jednego kanału'
   assert.equal(await magazyn.oznaczCutoverD1('123456789'), true);
   assert.equal(await magazyn.oznaczCutoverD1('123456789'), true);
   assert.equal(await magazyn.pobierzStanCutoveru('123456789'), 'd1');
-  await assert.rejects(magazyn.pobierzStanCutoveru('987654321'), /innego kanału/);
+  await assert.rejects(magazyn.pobierzStanCutoveru('987654321'), /przypisanego do latcha/);
   await assert.rejects(magazyn.oznaczCutoverD1('987654321'), /innego kanału/);
 });
 
