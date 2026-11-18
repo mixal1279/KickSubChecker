@@ -106,6 +106,34 @@ test('pobieranie roli jest ograniczone do kanału i serwera', async () => {
   assert.deepEqual(db.wywolania[0].args, ['12345', '23456']);
 });
 
+test('nowy webhook otrzymuje unikalny lease fencing token', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  const lease = await repo.przejmijWebhook({
+    broadcasterId: '12345',
+    eventId: 'event-lease-1',
+    eventType: 'channel.subscription.new',
+  });
+  assert.match(lease, /^[0-9a-f-]{36}$/i);
+  assert.equal(db.wywolania.length, 1);
+  assert.match(db.wywolania[0].sql, /lease_token/);
+  assert.match(db.wywolania[0].sql, /lease_expires_at_ms/);
+  assert.match(db.wywolania[0].sql, /julianday\('now'\)/);
+});
+
+test('oznaczenie webhooka jako failed wymaga aktywnego tokena lease', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await repo.oznaczWebhookNieudany({
+    broadcasterId: '12345',
+    eventId: 'event-lease-2',
+    leaseToken: '123e4567-e89b-12d3-a456-426614174000',
+  });
+  assert.match(db.wywolania[0].sql, /lease_token = \?/);
+  assert.match(db.wywolania[0].sql, /lease_expires_at_ms >/);
+  assert.match(db.wywolania[0].sql, /lease_token = NULL/);
+});
+
 test('duplikat webhooka nie jest ponownie przejmowany', async () => {
   const db = utworzFakeD1({ zmiany: 0 });
   const repo = utworzRepozytoriumD1(db);
