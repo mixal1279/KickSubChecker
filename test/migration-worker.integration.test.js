@@ -571,3 +571,19 @@ test('brak znacznika cutoveru zachowuje działanie backendu KV przed migracją',
     globalThis.fetch = poprzedniFetch;
   }
 });
+
+
+test('D1 nie obsługuje ruchu aplikacji przed zakończeniem importu KV', async () => {
+  const { env, wywolaniaD1 } = utworzEnv();
+  env.D1_ENABLED = 'true';
+  env.MIGRATION_WRITE_FREEZE = 'false';
+
+  const response = await worker.fetch(new Request(
+    'https://worker.test/api/check?username=testuser',
+    { headers: { Authorization: `Bearer ${sekret}` } },
+  ), env);
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'd1_cutover_requires_completed_migration' });
+  assert.deepEqual(wywolaniaD1, []);
+});
