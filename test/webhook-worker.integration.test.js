@@ -237,3 +237,12 @@ test('odrzuca zbyt duże body strumieniowe bez Content-Length przed buforowaniem
   assert.equal(response.status, 413);
   assert.equal(env.zapisy.length, 0);
 });
+
+
+test('nieznana jawna wartość MIGRATION_WRITE_FREEZE blokuje webhooki', async () => {
+  const env = utworzEnv();
+  env.MIGRATION_WRITE_FREEZE = 'TRUE';
+  const response = await worker.fetch(await utworzZadanie(env), env);
+  assert.equal(response.status, 503);
+  assert.equal(env.zapisy.length, 0);
+});
