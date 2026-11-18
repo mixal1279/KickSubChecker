@@ -383,6 +383,33 @@ test('import wygasłego OAuth odświeża token z timeoutem i nie przechodzi dale
 });
 
 
+test('refresh OAuth bez nowego refresh_token nie nadpisuje trwałych tokenów', async () => {
+  const { env, pobierzTokenyWlasciciela } = utworzEnv({ tokenWazny: false });
+  const poprzedniFetch = globalThis.fetch;
+  const poprzednieTokeny = pobierzTokenyWlasciciela();
+  const wywolania = [];
+
+  globalThis.fetch = async (url) => {
+    wywolania.push(String(url));
+    return new Response(JSON.stringify({
+      access_token: 'nowy-access-bez-refresh',
+      expires_in: 3600,
+    }), { status: 200 });
+  };
+
+  try {
+    const response = await worker.fetch(new Request(
+      'https://worker.test/api/admin/migrate-kv?dry_run=false',
+      { method: 'POST', headers: { Authorization: `Bearer ${sekretAdmina}` } },
+    ), env);
+    assert.equal(response.status, 500);
+    assert.deepEqual(wywolania, ['https://id.kick.com/oauth/token']);
+    assert.deepEqual(pobierzTokenyWlasciciela(), poprzednieTokeny);
+  } finally {
+    globalThis.fetch = poprzedniFetch;
+  }
+});
+
 test('błąd OAuth nie ujawnia treści odpowiedzi ani tokenów w logach', async () => {
   const { env, zapisyKv, wywolaniaD1 } = utworzEnv({ tokenWazny: false });
   const poprzedniFetch = globalThis.fetch;
