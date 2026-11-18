@@ -28,6 +28,72 @@ export class OAuthTokenStore extends DurableObject {
     `);
   }
 
+
+  #sprawdzDaneTokenow(dane) {
+    if (!dane || typeof dane !== 'object' || Array.isArray(dane)
+      || typeof dane.access_token !== 'string' || !dane.access_token
+      || typeof dane.refresh_token !== 'string' || !dane.refresh_token
+      || !Number.isSafeInteger(dane.expires_at) || dane.expires_at <= 0) {
+      throw new TypeError('Nieprawidłowe dane tokenów właściciela.');
+    }
+  }
+
+  async pobierzTokeny() {
+    return this.sql.exec(
+      'SELECT access_token, refresh_token, expires_at FROM oauth_credentials WHERE id = 1',
+    ).toArray()[0] || null;
+  }
+
+  async zainicjujTokeny(dane) {
+    this.#sprawdzDaneTokenow(dane);
+    return this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        'INSERT INTO oauth_credentials (id, access_token, refresh_token, expires_at) VALUES (1, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
+        dane.access_token, dane.refresh_token, dane.expires_at,
+      );
+      return this.sql.exec(
+        'SELECT access_token, refresh_token, expires_at FROM oauth_credentials WHERE id = 1',
+      ).toArray()[0] || null;
+    });
+  }
+
+  async zapiszTokeny(dane) {
+    this.#sprawdzDaneTokenow(dane);
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO oauth_credentials (id, access_token, refresh_token, expires_at)
+         VALUES (1, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           access_token = excluded.access_token,
+           refresh_token = excluded.refresh_token,
+           expires_at = excluded.expires_at`,
+        dane.access_token, dane.refresh_token, dane.expires_at,
+      );
+    });
+    return true;
+  }
+
+  async zapiszOdświeżoneTokeny(dane, idBlokady, poprzedniRefreshToken) {
+    this.#sprawdzDaneTokenow(dane);
+    if (typeof idBlokady !== 'string' || idBlokady.length > 64
+      || typeof poprzedniRefreshToken !== 'string' || !poprzedniRefreshToken) return false;
+    return this.ctx.storage.transactionSync(() => {
+      const blokada = this.sql.exec(
+        'SELECT reservation_id FROM oauth_locks WHERE lock_name = ? AND reservation_id = ? AND lease_until > ?',
+        'broadcaster', idBlokady, Date.now(),
+      ).toArray()[0];
+      if (!blokada) return false;
+      const wynik = this.sql.exec(
+        `UPDATE oauth_credentials
+         SET access_token = ?, refresh_token = ?, expires_at = ?
+         WHERE id = 1 AND refresh_token = ?
+         RETURNING id`,
+        dane.access_token, dane.refresh_token, dane.expires_at, poprzedniRefreshToken,
+      ).toArray();
+      return wynik.length === 1;
+    });
+  }
+
   async zapisz(token, typ, dane, wygasaAt) {
     this.#sprawdz(token, typ);
     if (!dane || typeof dane !== 'object' || Array.isArray(dane)) {
