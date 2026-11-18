@@ -5,11 +5,26 @@ import { OAuthTokenStore } from '../oauth-token-store.js';
 
 function utworzMagazyn() {
   const dane = new Map();
+  const blokady = new Map();
   let alarm = null;
   const sql = {
     exec(tekst, ...args) {
       const q = tekst.replace(/\\s+/g, ' ').trim().toUpperCase();
       if (q.startsWith('CREATE TABLE') || q.startsWith('CREATE INDEX')) return { toArray: () => [] };
+      if (q.startsWith('INSERT INTO OAUTH_LOCKS')) {
+        const [nazwa, id, leaseDo, teraz] = args;
+        const obecna = blokady.get(nazwa);
+        if (obecna && obecna.lease_until > teraz) return { toArray: () => [] };
+        blokady.set(nazwa, { reservation_id: id, lease_until: leaseDo });
+        return { toArray: () => [{ lock_name: nazwa }] };
+      }
+      if (q.startsWith('DELETE FROM OAUTH_LOCKS')) {
+        const [nazwa, id] = args;
+        const obecna = blokady.get(nazwa);
+        if (!obecna || obecna.reservation_id !== id) return { toArray: () => [] };
+        blokady.delete(nazwa);
+        return { toArray: () => [{ lock_name: nazwa }] };
+      }
       if (q.startsWith('INSERT INTO OAUTH_TOKENS')) {
         const [token, typ, json, wygasa_at] = args;
         if (dane.has(token)) throw new Error('UNIQUE constraint failed');
@@ -61,9 +76,12 @@ function utworzMagazyn() {
       sql,
       transactionSync(fn) {
         const kopia = structuredClone([...dane.entries()]);
+        const kopiaBlokad = structuredClone([...blokady.entries()]);
         try { return fn(); } catch (error) {
           dane.clear();
           for (const [klucz, wartosc] of kopia) dane.set(klucz, wartosc);
+          blokady.clear();
+          for (const [klucz, wartosc] of kopiaBlokad) blokady.set(klucz, wartosc);
           throw error;
         }
       },
@@ -164,6 +182,39 @@ test('wygasła rezerwacja może zostać przejęta po upływie lease', async () =
     Date.now = zegar;
   }
 });
+
+test('blokada odświeżania dopuszcza tylko jednego właściciela', async () => {
+  const { magazyn } = utworzMagazyn();
+  const [pierwsza, druga] = await Promise.all([
+    magazyn.zarezerwujBlokade('broadcaster', 20_000),
+    magazyn.zarezerwujBlokade('broadcaster', 20_000),
+  ]);
+  assert.equal([pierwsza, druga].filter(Boolean).length, 1);
+  const wlasciciel = pierwsza || druga;
+  assert.equal(await magazyn.zwolnijBlokade('broadcaster', 'obcy-token'), false);
+  assert.equal(await magazyn.zwolnijBlokade('broadcaster', wlasciciel), true);
+  assert.ok(await magazyn.zarezerwujBlokade('broadcaster', 20_000));
+});
+
+test('wygasła blokada odświeżania może zostać bezpiecznie przejęta', async () => {
+  const { magazyn } = utworzMagazyn();
+  const zegar = Date.now;
+  let teraz = zegar();
+  Date.now = () => teraz;
+  try {
+    const pierwsza = await magazyn.zarezerwujBlokade('broadcaster', 5_000);
+    assert.ok(pierwsza);
+    teraz += 5_001;
+    const druga = await magazyn.zarezerwujBlokade('broadcaster', 5_000);
+    assert.ok(druga);
+    assert.notEqual(druga, pierwsza);
+    assert.equal(await magazyn.zwolnijBlokade('broadcaster', pierwsza), false);
+    assert.equal(await magazyn.zwolnijBlokade('broadcaster', druga), true);
+  } finally {
+    Date.now = zegar;
+  }
+});
+
 
 test('alarm usuwa wygasłe tokeny i ustawia termin kolejnego czyszczenia', async () => {
   const { magazyn, dane, pobierzAlarm } = utworzMagazyn();
