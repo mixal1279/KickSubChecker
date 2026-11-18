@@ -58,12 +58,34 @@ function utworzEnv({ freeze = 'false', awariaZapisu = false } = {}) {
     async zwolnijBlokade() { return true; },
   };
   const kv = new Map();
+  const stanyCutoveru = new Map();
   return {
     freeze,
     zdarzenia,
     wpisy,
     pobierzTokeny: () => tokeny,
-    OAUTH_TOKENS: { getByName: () => magazyn },
+    OAUTH_TOKENS: {
+      getByName(nazwa) {
+        if (nazwa.startsWith('cutover-')) {
+          const broadcasterId = nazwa.slice('cutover-'.length);
+          return {
+            async pobierzStanCutoveru(id) {
+              const stan = stanyCutoveru.get(broadcasterId);
+              if (stan && stan.broadcaster_id !== id) throw new Error('broadcaster mismatch');
+              return stan?.backend || null;
+            },
+            async oznaczCutoverD1(id) {
+              if (id !== broadcasterId) throw new Error('broadcaster mismatch');
+              const stan = stanyCutoveru.get(broadcasterId);
+              if (stan && stan.broadcaster_id !== id) throw new Error('broadcaster mismatch');
+              stanyCutoveru.set(broadcasterId, { broadcaster_id: id, backend: 'd1' });
+              return true;
+            },
+          };
+        }
+        return magazyn;
+      },
+    },
     SUBS_KV: {
       async get(key, type) {
         const value = kv.get(key) ?? null;
