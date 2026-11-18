@@ -9,7 +9,7 @@ const kanal = '123456789';
 const token = 'test-access-token';
 const teraz = Date.now();
 
-function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bladImportBatch = false, bladListy = false, niekompletnaStrona = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0, countsJson = null, cursorPoczatkowy = null } = {}) {
+function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bladMarkera = false, bladImportBatch = false, bladListy = false, niekompletnaStrona = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0, countsJson = null, cursorPoczatkowy = null } = {}) {
   const rekordy = new Map();
   const subskrypcjeD1 = new Map();
   const markery = new Set();
@@ -18,6 +18,7 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
   let stan = null;
   let bladCheckpointRaz = bladCheckpoint;
   let bladFinalizacjiRaz = bladFinalizacji;
+  let bladMarkeraRaz = bladMarkera;
   let bladImportBatchRaz = bladImportBatch;
   let bladListyRaz = bladListy;
   let niekompletnaStronaRaz = niekompletnaStrona;
@@ -253,6 +254,10 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
         };
       },
       async put(key, value) {
+        if (key === 'config:d1_cutover_complete' && bladMarkeraRaz) {
+          bladMarkeraRaz = false;
+          throw new Error('symulowana awaria zapisu markera cutoveru');
+        }
         if (!['config:broadcaster_id', 'config:d1_cutover_complete'].includes(key)) {
           throw new Error('Migracja nie powinna zapisywać danych biznesowych do KV.');
         }
@@ -478,5 +483,35 @@ test('odrzuca stronę KV bez kursora przy list_complete=false', async () => {
     assert.equal(srodowisko.stan().lease_token, null);
     assert.equal(srodowisko.rekordy.size, 0);
     assert.equal(srodowisko.markery.size, 0);
+  });
+});
+
+
+test('awaria zapisu markera po ukończeniu D1 pozwala wznowić cutover bez ponownego importu', async () => {
+  const srodowisko = utworzSrodowisko({
+    fazaPoczatkowa: 'subscriptions', subskrypcje: 3, bladMarkera: true,
+  });
+  let odczytyStronKv = 0;
+  const lista = srodowisko.env.SUBS_KV.list;
+  srodowisko.env.SUBS_KV.list = async (...args) => {
+    odczytyStronKv++;
+    return lista(...args);
+  };
+
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.stan().status, 'completed');
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal([...srodowisko.markery].filter((x) => x.startsWith('subscriptions|')).length, 3);
+    assert.equal(srodowisko.konfiguracjaKv.has('config:d1_cutover_complete'), false);
+    const liczbaOdczytowPoAwarii = odczytyStronKv;
+
+    const wznowiona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(wznowiona.status, 200);
+    assert.equal((await wznowiona.json()).already_completed, true);
+    assert.equal(odczytyStronKv, liczbaOdczytowPoAwarii);
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal(srodowisko.konfiguracjaKv.get('config:d1_cutover_complete'), kanal);
   });
 });
