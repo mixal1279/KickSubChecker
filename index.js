@@ -520,8 +520,8 @@ async function handleWebhook(request, env) {
   const seenKey = `webhook:seen:${verification.id}`;
 
   if (repo) {
-    const przejety = await repo.przejmijWebhook({ broadcasterId, eventId: verification.id, eventType });
-    if (!przejety) return text('Duplicate event', 200);
+    const leaseToken = await repo.przejmijWebhook({ broadcasterId, eventId: verification.id, eventType });
+    if (!leaseToken) return text('Duplicate event', 200);
     try {
       const subscriptions = [];
       const validExpiry = typeof payload?.expires_at === 'string' && Number.isFinite(Date.parse(payload.expires_at));
@@ -559,10 +559,10 @@ async function handleWebhook(request, env) {
         }
         if (!subscriptions.length) throw new Error('Gift webhook contains no valid recipients');
       }
-      await repo.zakonczWebhook({ broadcasterId, eventId: verification.id, subscriptions });
+      await repo.zakonczWebhook({ broadcasterId, eventId: verification.id, leaseToken, subscriptions });
       return text('OK');
     } catch (error) {
-      await repo.oznaczWebhookNieudany({ broadcasterId, eventId: verification.id }).catch((markError) => {
+      await repo.oznaczWebhookNieudany({ broadcasterId, eventId: verification.id, leaseToken }).catch((markError) => {
         console.error('Nie udało się oznaczyć webhooka jako failed:', markError.message);
       });
       console.error('Błąd przetwarzania webhooka D1:', error.message);
