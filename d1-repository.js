@@ -249,104 +249,142 @@ export function utworzRepozytoriumD1(db) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
       if (typeof eventId !== 'string' || !/^[A-Za-z0-9._:-]{1,200}$/.test(eventId)) throw new TypeError('Nieprawidłowe ID webhooka.');
       if (typeof eventType !== 'string' || eventType.length > 100) throw new TypeError('Nieprawidłowy typ webhooka.');
+      const leaseToken = crypto.randomUUID();
+      const teraz = Date.now();
       const wynik = await db.prepare(`
         INSERT OR IGNORE INTO webhook_events
-          (broadcaster_id, event_id, event_type, status, received_at_ms)
-        VALUES (?, ?, ?, 'processing', ?)
-      `).bind(kanal, eventId, eventType, Date.now()).run();
+          (broadcaster_id, event_id, event_type, status, received_at_ms, lease_token, lease_expires_at_ms)
+        VALUES (?, ?, ?, 'processing', ?, ?, CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 300000)
+      `).bind(kanal, eventId, eventType, teraz, leaseToken).run();
       sprawdzWynik(wynik, 'Rejestracja webhooka');
-      if (Number(wynik.meta?.changes || 0) === 1) return true;
+      if (Number(wynik.meta?.changes || 0) === 1) return leaseToken;
 
-      // Ponawiamy błędne lub porzucone (starsze niż 5 min) przetwarzanie; aktywne i gotowe eventy są chronione.
+      // Przejęcie wymaga failed albo wygasłego lease; token odgradza poprzednią instancję.
       const ponowienie = await db.prepare(`
         UPDATE webhook_events
-        SET status = 'processing', received_at_ms = ?, processed_at_ms = NULL
+        SET status = 'processing', received_at_ms = ?, processed_at_ms = NULL,
+          lease_token = ?,
+          lease_expires_at_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 300000
         WHERE broadcaster_id = ? AND event_id = ?
           AND (
             status = 'failed'
-            OR (status = 'processing' AND received_at_ms < ?)
+            OR (status = 'processing' AND (
+              lease_expires_at_ms <= CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+              OR (lease_expires_at_ms IS NULL AND received_at_ms <
+                CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) - 300000)
+            ))
           )
-      `).bind(Date.now(), kanal, eventId, Date.now() - 5 * 60 * 1000).run();
+      `).bind(teraz, leaseToken, kanal, eventId).run();
       sprawdzWynik(ponowienie, 'Ponowne przejęcie webhooka');
-      return Number(ponowienie.meta?.changes || 0) === 1;
+      return Number(ponowienie.meta?.changes || 0) === 1 ? leaseToken : false;
     },
 
-    async zakonczWebhook({ broadcasterId, eventId, subscriptions }) {
+    async zakonczWebhook({ broadcasterId, eventId, leaseToken, subscriptions }) {
       const kanal = wymagajId(broadcasterId, 'ID kanału Kick');
+      if (typeof leaseToken !== 'string' || !/^[0-9a-f-]{36}$/i.test(leaseToken)) {
+        throw new TypeError('Nieprawidłowy token lease webhooka.');
+      }
       if (!Array.isArray(subscriptions) || subscriptions.length > 500) {
         throw new TypeError('Nieprawidłowa lista subskrypcji z webhooka.');
       }
-      const teraz = Date.now();
-      const polecenia = [];
-      for (const sub of subscriptions) {
-        const nick = normalizujNick(sub.kickUsername);
-        const kickId = sub.kickUserId == null ? null : wymagajId(sub.kickUserId, 'ID użytkownika Kick');
-        const expiry = Number(sub.expiresAtMs);
-        if (!Number.isSafeInteger(expiry) || expiry <= 0 || !SOURCE_TYPES.has(sub.source)) throw new TypeError('Nieprawidłowe dane subskrypcji.');
-        const klucz = kickId ? `id:${kickId}` : `name:${nick.toLowerCase()}`;
-        if (kickId) {
-          // ID z podpisanego webhooka może uzupełnić starszy rekord po nicku,
-          // ale nie zmienia jego nowszej daty ani pozostałych metadanych.
+
+      // Porcje 44 odbiorców mieszczą heartbeat i maksymalnie 88 zapisów w jednym batchu.
+      for (let offset = 0; offset < subscriptions.length; offset += 44) {
+        const teraz = Date.now();
+        const polecenia = [db.prepare(`
+          UPDATE webhook_events
+          SET lease_expires_at_ms = CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) + 300000
+          WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
+            AND lease_token = ?
+            AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+        `).bind(kanal, eventId, leaseToken)];
+
+        for (const sub of subscriptions.slice(offset, offset + 44)) {
+          const nick = normalizujNick(sub.kickUsername);
+          const kickId = sub.kickUserId == null ? null : wymagajId(sub.kickUserId, 'ID użytkownika Kick');
+          const expiry = Number(sub.expiresAtMs);
+          if (!Number.isSafeInteger(expiry) || expiry <= 0 || !SOURCE_TYPES.has(sub.source)) throw new TypeError('Nieprawidłowe dane subskrypcji.');
+          const klucz = kickId ? `id:${kickId}` : `name:${nick.toLowerCase()}`;
+
+          if (kickId) {
+            polecenia.push(db.prepare(`
+              UPDATE subscriptions SET kick_user_id = ?
+              WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
+                AND kick_user_id IS NULL
+                AND EXISTS (
+                  SELECT 1 FROM webhook_events
+                  WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
+                    AND lease_token = ?
+                    AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+                )
+            `).bind(kickId, kanal, nick, kanal, eventId, leaseToken));
+          }
+
           polecenia.push(db.prepare(`
-            UPDATE subscriptions SET kick_user_id = ?
-            WHERE broadcaster_id = ? AND kick_username = ? COLLATE NOCASE
-              AND kick_user_id IS NULL
-              AND EXISTS (
-                SELECT 1 FROM webhook_events
-                WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
-              )
-          `).bind(kickId, kanal, nick, kanal, eventId));
+            INSERT INTO subscriptions
+              (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
+            SELECT ?, ?, ?, ?, ?, ?, ?
+            WHERE EXISTS (
+              SELECT 1 FROM webhook_events
+              WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
+                AND lease_token = ?
+                AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+            )
+            ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
+              kick_user_id = CASE
+                WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+                THEN COALESCE(excluded.kick_user_id, subscriptions.kick_user_id)
+                ELSE subscriptions.kick_user_id
+              END,
+              kick_username = CASE
+                WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+                THEN excluded.kick_username ELSE subscriptions.kick_username
+              END,
+              expires_at_ms = MAX(subscriptions.expires_at_ms, excluded.expires_at_ms),
+              source = CASE
+                WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+                THEN excluded.source ELSE subscriptions.source
+              END,
+              updated_at_ms = CASE
+                WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
+                THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms
+              END
+          `).bind(kanal, klucz, kickId, nick, expiry, sub.source, teraz, kanal, eventId, leaseToken));
         }
-        polecenia.push(db.prepare(`
-          INSERT INTO subscriptions
-            (broadcaster_id, subscriber_key, kick_user_id, kick_username, expires_at_ms, source, updated_at_ms)
-          SELECT ?, ?, ?, ?, ?, ?, ?
-          WHERE EXISTS (
-            SELECT 1 FROM webhook_events
-            WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
-          )
-          ON CONFLICT(broadcaster_id, subscriber_key) DO UPDATE SET
-            kick_user_id = CASE
-              WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
-              THEN COALESCE(excluded.kick_user_id, subscriptions.kick_user_id)
-              ELSE subscriptions.kick_user_id
-            END,
-            kick_username = CASE
-              WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
-              THEN excluded.kick_username ELSE subscriptions.kick_username
-            END,
-            expires_at_ms = MAX(subscriptions.expires_at_ms, excluded.expires_at_ms),
-            source = CASE
-              WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
-              THEN excluded.source ELSE subscriptions.source
-            END,
-            updated_at_ms = CASE
-              WHEN excluded.expires_at_ms >= subscriptions.expires_at_ms
-              THEN excluded.updated_at_ms ELSE subscriptions.updated_at_ms
-            END
-        `).bind(kanal, klucz, kickId, nick, expiry, sub.source, teraz, kanal, eventId));
+
+        const wyniki = await db.batch(polecenia);
+        wyniki.forEach((wynik, idx) => sprawdzWynik(wynik, `Zapis webhooka (operacja ${offset + idx})`));
+        if (Number(wyniki[0]?.meta?.changes || 0) !== 1) {
+          throw new Error('Utracono lease webhooka podczas zapisu.');
+        }
       }
-      // D1 batch ma limit liczby instrukcji; 90 instrukcji na porcję mieści do 45 odbiorców.
-      // Event pozostaje processing do czasu zapisania wszystkich odbiorców.
-      for (let i = 0; i < polecenia.length; i += 90) {
-        const wyniki = await db.batch(polecenia.slice(i, i + 90));
-        wyniki.forEach((wynik, j) => sprawdzWynik(wynik, `Zapis webhooka (operacja ${i + j + 1})`));
-      }
+
+      const teraz = Date.now();
       const finalizacja = await db.prepare(`
-        UPDATE webhook_events SET status = 'processed', processed_at_ms = ?
+        UPDATE webhook_events SET status = 'processed', processed_at_ms = ?,
+          lease_token = NULL, lease_expires_at_ms = NULL
         WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
-      `).bind(teraz, kanal, eventId).run();
+          AND lease_token = ?
+          AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      `).bind(teraz, kanal, eventId, leaseToken).run();
       sprawdzWynik(finalizacja, 'Finalizacja webhooka');
+      if (Number(finalizacja.meta?.changes || 0) !== 1) {
+        throw new Error('Utracono lease webhooka przed finalizacją.');
+      }
     },
 
-    async oznaczWebhookNieudany({ broadcasterId, eventId }) {
+    async oznaczWebhookNieudany({ broadcasterId, eventId, leaseToken }) {
+      if (typeof leaseToken !== 'string' || !/^[0-9a-f-]{36}$/i.test(leaseToken)) return false;
       const wynik = await db.prepare(`
-        UPDATE webhook_events SET status = 'failed'
+        UPDATE webhook_events SET status = 'failed',
+          lease_token = NULL, lease_expires_at_ms = NULL
         WHERE broadcaster_id = ? AND event_id = ? AND status = 'processing'
-      `).bind(wymagajId(broadcasterId, 'ID kanału Kick'), eventId).run();
+          AND lease_token = ?
+          AND lease_expires_at_ms > CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)
+      `).bind(wymagajId(broadcasterId, 'ID kanału Kick'), eventId, leaseToken).run();
       sprawdzWynik(wynik, 'Oznaczenie błędnego webhooka');
+      return Number(wynik.meta?.changes || 0) === 1;
     },
-
 
 
     async importujPowiazanieMigracja({ broadcasterId, sourceKey, discordUserId, kickUserId, kickUsername }) {
