@@ -30,6 +30,7 @@ Odświeżanie OAuth zachowuje poprzedni refresh token, jeśli Kick nie zwróci n
 - `0003_require_broadcaster_id.sql` dodaje triggery blokujące `NULL` w `channels.broadcaster_id` przy INSERT i UPDATE. Nie przebudowuje tabel ani nie modyfikuje istniejących rekordów.
 - `0004_kv_migration_runs.sql` tworzy trwały stan migracji per kanał: fazę, cursor, liczniki i lease, z CASCADE po usunięciu kanału.
 - `0005_kv_migration_items.sql` tworzy unikalne markery idempotencji dla źródłowych kluczy KV w fazach `links` i `subscriptions`, również z CASCADE.
+- `0006_subscriptions_kick_user_id_idx.sql` dodaje indeks złożony dla zapytań subskrypcji po zweryfikowanym ID Kick i dacie wygaśnięcia.
 
 Migracje SQL nie modyfikują KV. Nie edytuj już zastosowanych migracji — zmiany schematu wprowadzaj kolejnymi numerowanymi migracjami. Migracje należy wykonywać dokładnie raz i zapisywać ich zastosowanie w dokumentacji wdrożenia; repozytorium nie ma jeszcze automatycznego rejestru migracji.
 
@@ -56,15 +57,17 @@ Lokalnie ustaw te same zmienne środowiskowe i uruchom `npm test`. Test używa w
 
 ## Kolejność bezpiecznego przełączenia
 
-1. Zastosuj migracje D1 `0001` → `0002` → `0003` → `0004` → `0005` w środowisku docelowym.
-2. Ustaw `D1_ENABLED = "false"`. Nie wdrażaj przełączenia na produkcję na tym etapie.
-3. Uruchom `POST /api/admin/migrate-kv` (domyślnie dry-run).
-4. Sprawdź `links_skipped`, `subscriptions_seen`, `subscriptions_valid` i `errors`. Indeksy `sub:user_id:` są pomijane — importowane są tylko kanoniczne rekordy `sub:<username>`.
-5. Uruchom import przez `POST /api/admin/migrate-kv?dry_run=false`. Operacja nie usuwa źródłowych rekordów KV i może być ponawiana.
-6. Porównaj liczbę rekordów i sprawdź konta testowe po nicku oraz po ID.
-7. Dopiero po walidacji ustaw `D1_ENABLED = "true"` i wykonaj kontrolowane wdrożenie.
+1. Zastosuj migracje D1 `0001` → `0002` → `0003` → `0004` → `0005` → `0006` w środowisku docelowym.
+2. Ustaw `D1_ENABLED = "false"` oraz `MIGRATION_WRITE_FREEZE = "false"`. Nie przełączaj jeszcze odczytów na D1.
+3. Uruchom `POST /api/admin/migrate-kv` (domyślnie dry-run) i sprawdź raport.
+4. Włącz `MIGRATION_WRITE_FREEZE = "true"` i wdróż tę konfigurację. Od tej chwili Worker zwraca HTTP 503 dla webhooków, callbacków OAuth, rozpoczęcia nowych linków i rejestracji eventów. Odczyty pozostają dostępne.
+5. Po wdrożeniu freeze odczekaj co najmniej 2 minuty, aby zakończyły się żądania rozpoczęte na poprzedniej wersji. Nie uruchamiaj importu przed upływem tego czasu. Kick może ponawiać webhooki odrzucone kodem 503.
+6. Uruchom import przez `POST /api/admin/migrate-kv?dry_run=false`. Endpoint odrzuci import, jeśli `MIGRATION_WRITE_FREEZE` nie jest ustawione na `true`. Import jest idempotentny i można go wznowić przy utrzymanym freeze.
+7. Porównaj liczbę rekordów, konflikty i konta testowe po nicku oraz po ID. Historyczne subskrypcje bez ID są wiązane z ID tylko przez istniejące, zweryfikowane powiązania kont.
+8. W jednym kontrolowanym wdrożeniu ustaw `D1_ENABLED = "true"` i `MIGRATION_WRITE_FREEZE = "false"`. Nie zdejmuj freeze wcześniej.
+9. Zweryfikuj `/api/check`, `/api/link` oraz odbiór webhooków po przełączeniu.
 
-Endpoint migracyjny wymaga osobnego `ADMIN_API_SECRET`, niezależnego od `BOT_API_SECRET` i nieudostępnianego botowi. Nie umieszczaj sekretów w repozytorium ani w logach. Ustaw go w Cloudflare jako secret przed użyciem endpointu. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje OAuth i stan pomocniczy.
+Endpoint migracyjny wymaga osobnego `ADMIN_API_SECRET`, niezależnego od `BOT_API_SECRET` i nieudostępnianego botowi. Nie umieszczaj sekretów w repozytorium ani w logach. Ustaw go w Cloudflare jako secret przed użyciem endpointu. KV pozostaje aktywne po przełączeniu, ponieważ nadal przechowuje OAuth i stan pomocniczy. Nie traktuj zgodności liczby markerów jako dowodu braku utraconych zapisów — gwarancję domknięcia luki daje wyłącznie utrzymany freeze zapisu od opróżnienia żądań in-flight do atomowego przełączenia na D1.
 
 
 ## Dodatkowe zabezpieczenia webhooków
