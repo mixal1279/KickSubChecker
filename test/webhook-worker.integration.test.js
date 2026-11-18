@@ -141,3 +141,30 @@ test('duplikat eventu jest potwierdzany bez ponownego zapisu', async () => {
   assert.equal(await drugie.text(), 'Duplicate event');
   assert.equal(env.zapisy.length, liczbaZapisow);
 });
+
+test('starszy webhook nie cofa indeksu subskrypcji po Kick user ID', async () => {
+  const env = utworzEnv();
+  const nowszeWygasniecie = new Date(Date.now() + 30 * 86400_000).toISOString();
+  const starszeWygasniecie = new Date(Date.now() + 10 * 86400_000).toISOString();
+  const nowszy = await worker.fetch(await utworzZadanie(env, {
+    eventId: '01TESTEVENT0000000000000002',
+    payload: {
+      broadcaster: { user_id: broadcasterId, username: 'testchannel' },
+      subscriber: { user_id: '987654321', username: 'NewName' },
+      expires_at: nowszeWygasniecie,
+    },
+  }), env);
+  const starszy = await worker.fetch(await utworzZadanie(env, {
+    eventId: '01TESTEVENT0000000000000003',
+    payload: {
+      broadcaster: { user_id: broadcasterId, username: 'testchannel' },
+      subscriber: { user_id: '987654321', username: 'OldName' },
+      expires_at: starszeWygasniecie,
+    },
+  }), env);
+  assert.equal(nowszy.status, 200);
+  assert.equal(starszy.status, 200);
+  const indeks = env.zapisy.filter((x) => x.klucz === 'sub:user_id:987654321').at(-1);
+  assert.equal(JSON.parse(indeks.wartosc).username, 'NewName');
+  assert.equal(JSON.parse(indeks.wartosc).expires_at, nowszeWygasniecie);
+});
