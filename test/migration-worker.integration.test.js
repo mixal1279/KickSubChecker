@@ -523,6 +523,7 @@ test('odczyt D1 ponawia inicjalizację kanału, gdy KV ma już broadcaster ID', 
   const { env, dane } = utworzEnv();
   env.D1_ENABLED = 'true';
   dane.set('config:d1_cutover_complete', broadcasterId);
+  ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
   dane.set('config:broadcaster_username', 'testchannel');
   const zapytania = [];
   env.DB = {
@@ -594,10 +595,11 @@ test('błędna konfiguracja D1 blokuje także endpointy tworzące nowe linki', a
 
 
 test('znacznik zakończonego cutoveru blokuje powrót do KV', async () => {
-  const { env, dane, zapisyKv, wywolaniaD1 } = utworzEnv();
+  const { env, dane, zapisyKv, wywolaniaD1, ustawStanCutoveru } = utworzEnv();
   env.D1_ENABLED = 'false';
   env.MIGRATION_WRITE_FREEZE = 'false';
   dane.set('config:d1_cutover_complete', broadcasterId);
+  ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
 
   const response = await worker.fetch(new Request(
     'https://worker.test/api/check?username=testuser',
