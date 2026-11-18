@@ -317,16 +317,22 @@ test('import powiązania z KV używa markera idempotencji i nie tworzy audytu pr
   const nowy = await repo.importujPowiazanieMigracja({
     broadcasterId: '12345', sourceKey: 'link:discord:23456789012345678',
     discordUserId: '23456789012345678', kickUserId: '34567', kickUsername: 'Nick',
+    leaseToken: 'abcdefghijklmnopqrstuvwx123456',
   });
   assert.equal(nowy, true);
   const batch = db.wywolania[0];
   assert.equal(batch.typ, 'batch');
   assert.equal(batch.polecenia.length, 3);
   assert.match(batch.polecenia[0].sql, /INSERT INTO account_links/);
+  assert.match(batch.polecenia[0].sql, /FROM migration_runs/);
+  assert.match(batch.polecenia[0].sql, /lease_token = \\?/);
+  assert.match(batch.polecenia[0].sql, /lease_expires_at_ms >/);
   assert.match(batch.polecenia[0].sql, /ON CONFLICT DO NOTHING/);
   assert.match(batch.polecenia[1].sql, /INSERT OR IGNORE INTO migration_items/);
   assert.match(batch.polecenia[1].sql, /WHERE EXISTS/);
-  assert.match(batch.polecenia[2].sql, /SELECT 1 AS imported FROM migration_items/);
+  assert.match(batch.polecenia[1].sql, /FROM migration_runs/);
+  assert.match(batch.polecenia[2].sql, /CASE WHEN EXISTS/);
+  assert.match(batch.polecenia[2].sql, /ELSE -1 END AS imported/);
   assert.equal(db.wywolania.length, 1, 'Odczyt markera musi być częścią tego samego batcha.');
   assert.doesNotMatch(batch.polecenia.map(x => x.sql).join(' '), /audit_log/);
 });
@@ -338,13 +344,17 @@ test('import subskrypcji z KV zapisuje marker i rekord w jednej paczce', async (
     broadcasterId: '12345', sourceKey: 'sub:testuser',
     kickUserId: '34567', kickUsername: 'TestUser',
     expiresAtMs: Date.now() + 60_000, source: 'admin',
+    leaseToken: 'abcdefghijklmnopqrstuvwx123456',
   });
   assert.equal(nowa, true);
   const batch = db.wywolania[0];
   assert.equal(batch.typ, 'batch');
   assert.equal(batch.polecenia.length, 3);
   assert.match(batch.polecenia[0].sql, /INSERT OR IGNORE INTO migration_items/);
+  assert.match(batch.polecenia[0].sql, /FROM migration_runs/);
   assert.match(batch.polecenia[1].sql, /INSERT INTO subscriptions/);
+  assert.match(batch.polecenia[1].sql, /lease_token = \\?/);
+  assert.match(batch.polecenia[1].sql, /lease_expires_at_ms >/);
   assert.match(batch.polecenia[1].sql, /ON CONFLICT\(broadcaster_id, subscriber_key\) DO UPDATE/);
   assert.match(batch.polecenia[2].sql, /SELECT 1 AS imported FROM migration_items/);
   assert.equal(db.wywolania.length, 1, 'Odczyt markera musi być częścią tego samego batcha.');
@@ -365,6 +375,22 @@ test('import migracyjny odrzuca klucz spoza właściwego prefiksu przed SQL', as
   assert.equal(db.wywolania.length, 0);
 });
 
+
+
+test('import migracyjny wymaga lease przed wykonaniem SQL', async () => {
+  const db = utworzFakeD1();
+  const repo = utworzRepozytoriumD1(db);
+  await assert.rejects(repo.importujPowiazanieMigracja({
+    broadcasterId: '12345', sourceKey: 'link:discord:23456789012345678',
+    discordUserId: '23456789012345678', kickUserId: '34567', kickUsername: 'Nick',
+  }), /token blokady migracji/);
+  await assert.rejects(repo.importujSubskrypcjeMigracja({
+    broadcasterId: '12345', sourceKey: 'sub:testuser',
+    kickUserId: '34567', kickUsername: 'TestUser',
+    expiresAtMs: Date.now() + 60_000, source: 'admin',
+  }), /token blokady migracji/);
+  assert.equal(db.wywolania.length, 0);
+});
 
 test('liczniki migracji są pobierane z trwałych markerów D1', async () => {
   const db = utworzFakeD1({ pierwszy: { links: 3, subscriptions: 7, total: 10 } });
