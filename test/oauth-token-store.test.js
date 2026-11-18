@@ -68,6 +68,7 @@ function utworzMagazyn() {
         }
       },
       async setAlarm(czas) { alarm = czas; },
+      async getAlarm() { return alarm; },
     },
   };
   const magazyn = new OAuthTokenStore(ctx, {});
@@ -90,8 +91,9 @@ test('token można zużyć dokładnie jeden raz', async () => {
 
 test('token wygasły jest usuwany i nie może być użyty', async () => {
   const { magazyn } = utworzMagazyn();
-  await magazyn.zapisz(token, 'owner-start', { created_at: 1 }, Date.now() + 60_000);
-  assert.equal(await magazyn.zuzyj(token, 'owner-start', Date.now() + 60_000), null);
+  await magazyn.zapisz(token, 'owner-start', { created_at: 1 }, Date.now() + 20);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(await magazyn.zuzyj(token, 'owner-start'), null);
   assert.equal(await magazyn.zuzyj(token, 'owner-start'), null);
 });
 
@@ -146,20 +148,48 @@ test('nieudana wymiana kodu zwalnia rezerwację do ponowienia', async () => {
 
 test('wygasła rezerwacja może zostać przejęta po upływie lease', async () => {
   const { magazyn } = utworzMagazyn();
-  const teraz = Date.now();
-  await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, teraz + 100_000);
-  const pierwsza = await magazyn.zarezerwuj(token, 'oauth-state', teraz + 1_000, 5_000);
-  assert.ok(pierwsza);
-  const druga = await magazyn.zarezerwuj(token, 'oauth-state', teraz + 6_001, 5_000);
-  assert.ok(druga);
-  assert.notEqual(druga.id, pierwsza.id);
-  assert.equal(await magazyn.zakoncz(token, 'oauth-state', pierwsza.id), false);
+  const zegar = Date.now;
+  let teraz = zegar();
+  Date.now = () => teraz;
+  try {
+    await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, teraz + 100_000);
+    const pierwsza = await magazyn.zarezerwuj(token, 'oauth-state', 5_000);
+    assert.ok(pierwsza);
+    teraz += 6_001;
+    const druga = await magazyn.zarezerwuj(token, 'oauth-state', 5_000);
+    assert.ok(druga);
+    assert.notEqual(druga.id, pierwsza.id);
+    assert.equal(await magazyn.zakoncz(token, 'oauth-state', pierwsza.id), false);
+  } finally {
+    Date.now = zegar;
+  }
 });
 
 test('alarm usuwa wygasłe tokeny i ustawia termin kolejnego czyszczenia', async () => {
   const { magazyn, dane, pobierzAlarm } = utworzMagazyn();
   await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, Date.now() + 60_000);
-  assert.ok(pobierzAlarm() > Date.now());
+  const pierwszyAlarm = pobierzAlarm();
+  assert.ok(pierwszyAlarm > Date.now());
+  await magazyn.zapisz('ZyXwVuTsRqPoNmLkJiHgFeDc', 'link-start', { discord_id: '12345678901234567' }, Date.now() + 120_000);
+  assert.equal(pobierzAlarm(), pierwszyAlarm, 'nowy token nie może przesuwać wcześniejszego alarmu');
   await magazyn.alarm();
-  assert.equal(dane.size, 1);
+  assert.equal(dane.size, 2);
+});
+
+test('zuzyj nie zwraca danych, jeśli lease wygasł przed zatwierdzeniem', async () => {
+  const { magazyn } = utworzMagazyn();
+  const zegar = Date.now;
+  let teraz = zegar();
+  Date.now = () => teraz;
+  try {
+    await magazyn.zapisz(token, 'oauth-state', { verifier: 'pkce' }, teraz + 60_000);
+    const zakoncz = magazyn.zakoncz.bind(magazyn);
+    magazyn.zakoncz = async (...args) => {
+      teraz += 31_000;
+      return zakoncz(...args);
+    };
+    assert.equal(await magazyn.zuzyj(token, 'oauth-state'), null);
+  } finally {
+    Date.now = zegar;
+  }
 });
