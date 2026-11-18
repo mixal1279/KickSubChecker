@@ -159,14 +159,22 @@ function sprawdzKonfiguracjeBackendu(env) {
 }
 async function blokujPowrotDoKvPoMigracji(env, pathname) {
   if (['/', '/preview', '/api/admin/migrate-kv'].includes(pathname)) return null;
-  if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') return null;
-  const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
-  // D1 nie może zostać aktywowane bez zakończonego importu i trwałego znacznika.
-  if (env.D1_ENABLED === 'true') {
-    return marker == null || marker === '' ? 'd1_cutover_requires_completed_migration' : null;
+  if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') {
+    return env.D1_ENABLED === 'true' ? 'd1_cutover_marker_unavailable' : null;
   }
+  const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
+  if (marker == null || marker === '') {
+    return env.D1_ENABLED === 'true' ? 'd1_cutover_requires_completed_migration' : null;
+  }
+  const storedId = await env.SUBS_KV.get('config:broadcaster_id');
+  const expectedId = String(env.KICK_BROADCASTER_ID || storedId || '').trim();
+  if (
+    !/^[0-9]{1,32}$/.test(String(marker))
+    || !/^[0-9]{1,32}$/.test(expectedId)
+    || String(marker) !== expectedId
+  ) return 'd1_cutover_broadcaster_mismatch';
   // Po zakończonym imporcie KV jest już tylko kopią historyczną.
-  return marker != null && marker !== '' ? 'd1_cutover_requires_d1_backend' : null;
+  return env.D1_ENABLED === 'true' ? null : 'd1_cutover_requires_d1_backend';
 }
 async function oznaczWymaganyBackendD1(env, broadcasterId) {
   const klucz = 'config:d1_cutover_complete';
