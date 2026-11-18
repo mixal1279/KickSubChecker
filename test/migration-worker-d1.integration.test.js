@@ -53,7 +53,7 @@ class AdapterD1Rest {
     this.calls++;
     const result = await zapytajCloudflare(this.path, {
       sql,
-      params: params.map((wartosc) => String(wartosc)),
+      params: params.map((wartosc) => wartosc == null ? null : String(wartosc)),
     });
     const wynik = result?.[0] || { success: true, results: [], meta: {} };
     if (wynik.success === false) throw new Error('Cloudflare D1 query failed.');
@@ -90,7 +90,7 @@ class AdapterD1Rest {
     return zapytajCloudflare(this.path, {
       batch: statements.map(({ sql, params = [] }) => ({
         sql,
-        params: params.map((wartosc) => String(wartosc)),
+        params: params.map((wartosc) => wartosc == null ? null : String(wartosc)),
       })),
     });
   }
