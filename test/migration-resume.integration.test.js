@@ -173,6 +173,7 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
     ADMIN_API_SECRET: sekretAdmina,
     KICK_BROADCASTER_ID: kanal,
     D1_ENABLED: 'false',
+    MIGRATION_WRITE_FREEZE: 'true',
     DB: db,
     SUBS_KV: {
       async get(key, type) {
