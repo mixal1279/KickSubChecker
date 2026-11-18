@@ -121,7 +121,7 @@ function utworzEnv({
     },
   };
 
-  return { env, dane, zapisyKv, wywolaniaD1, pobierzTokenyWlasciciela: () => tokenyWlasciciela };
+  return { env, dane, zapisyKv, wywolaniaD1, pobierzTokenyWlasciciela: () => tokenyWlasciciela, ustawStanCutoveru: (stan) => { stanCutoveru = stan; } };
 }
 
 function utworzRequest() {
@@ -130,6 +130,37 @@ function utworzRequest() {
     headers: { Authorization: `Bearer ${sekretAdmina}` },
   });
 }
+
+
+test('zwykły ruch KV działa przed cutoverem tylko przy sprawnym latchu DO', async () => {
+  const { env } = utworzEnv();
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 401, 'brak autoryzacji API powinien być sprawdzony dopiero po bramce cutoveru');
+});
+
+test('Worker fail-closed przy niedostępnym bindingu latcha cutoveru', async () => {
+  const { env } = utworzEnv();
+  env.OAUTH_TOKENS.getByName = () => { throw new Error('DO unavailable'); };
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_latch_unavailable');
+});
+
+test('Worker blokuje powrót do KV po aktywacji latcha D1', async () => {
+  const { env, ustawStanCutoveru } = utworzEnv();
+  ustawStanCutoveru({ broadcaster_id: broadcasterId, backend: 'd1' });
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_requires_d1_backend');
+});
+
+test('Worker blokuje D1 bez aktywnego latcha', async () => {
+  const { env } = utworzEnv();
+  env.D1_ENABLED = 'true';
+  const response = await worker.fetch(new Request('https://worker.test/api/check?username=testuser'), env);
+  assert.equal(response.status, 503);
+  assert.equal((await response.json()).error, 'd1_cutover_requires_completed_migration');
+});
 
 test('endpoint dry-run wykonuje wyłącznie GET tożsamości Kick i nie zapisuje KV ani D1', async () => {
   const { env, zapisyKv, wywolaniaD1 } = utworzEnv();
