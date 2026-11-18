@@ -158,13 +158,15 @@ function sprawdzKonfiguracjeBackendu(env) {
   }
 }
 async function blokujPowrotDoKvPoMigracji(env, pathname) {
-  if (['/', '/preview', '/api/admin/migrate-kv'].includes(pathname)) return false;
-  if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') return false;
+  if (['/', '/preview', '/api/admin/migrate-kv'].includes(pathname)) return null;
+  if (!env.SUBS_KV || typeof env.SUBS_KV.get !== 'function') return null;
   const marker = await env.SUBS_KV.get('config:d1_cutover_complete');
   // D1 nie może zostać aktywowane bez zakończonego importu i trwałego znacznika.
-  if (env.D1_ENABLED === 'true') return marker == null || marker === '';
+  if (env.D1_ENABLED === 'true') {
+    return marker == null || marker === '' ? 'd1_cutover_requires_completed_migration' : null;
+  }
   // Po zakończonym imporcie KV jest już tylko kopią historyczną.
-  return marker != null && marker !== '';
+  return marker != null && marker !== '' ? 'd1_cutover_requires_d1_backend' : null;
 }
 async function oznaczWymaganyBackendD1(env, broadcasterId) {
   const klucz = 'config:d1_cutover_complete';
@@ -1283,9 +1285,8 @@ export default {
     const url = new URL(request.url);
     try {
       sprawdzKonfiguracjeBackendu(env);
-      if (await blokujPowrotDoKvPoMigracji(env, url.pathname)) {
-        return json({ error: 'd1_cutover_requires_d1_backend' }, 503, { 'Retry-After': '120' });
-      }
+      const bladCutoveru = await blokujPowrotDoKvPoMigracji(env, url.pathname);
+      if (bladCutoveru) return json({ error: bladCutoveru }, 503, { 'Retry-After': '120' });
       if (url.pathname === '/ljay-live' || url.pathname === '/ljay-live/start') return handleLjayLive(request, env);
       if (url.pathname === '/preview') return new Response(previewPage(), { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'" } });
       if (url.pathname === '/authorize') return handleAuthorize(request, env);
