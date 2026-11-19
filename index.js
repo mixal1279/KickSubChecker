@@ -449,7 +449,11 @@ async function handleAuthorize(request, env) {
     return text('Aby połączyć konto widza, użyj /polacz-konto na Discordzie. Autoryzację właściciela kanału uruchamia administrator.', 403);
   }
   const verifier = randomString(64); const challenge = base64UrlEncode(await sha256(verifier)); const state = randomString(24);
-  await zapiszTokenJednorazowy(env, state, 'oauth-state', { verifier, discord_id: linkDiscordId, owner: ownerFlow, created_at: Date.now() });
+  const generacja = ownerFlow ? await magazynBlokadOdświeżania(env).nowaGeneracjaOAuth() : null;
+  await zapiszTokenJednorazowy(env, state, 'oauth-state', {
+    verifier, discord_id: linkDiscordId, owner: ownerFlow, created_at: Date.now(),
+    ...(ownerFlow ? { generacja } : {}),
+  });
   const scope = ownerFlow ? 'user:read events:subscribe' : 'user:read';
   const params = new URLSearchParams({ response_type: 'code', client_id: env.KICK_CLIENT_ID, redirect_uri: env.REDIRECT_URI, scope, code_challenge: challenge, code_challenge_method: 'S256', state });
   return Response.redirect(`${KICK_AUTHORIZE_URL}?${params}`, 302);
