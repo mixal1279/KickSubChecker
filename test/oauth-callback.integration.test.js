@@ -135,11 +135,13 @@ function przygotujCallback(env, dane = {}) {
   env.OAUTH_TOKENS.getByName = () => env._magazyn;
 }
 
-function dodajState(env, { owner = true, discord_id = null, expected_username = null } = {}) {
+async function dodajState(env, { owner = true, discord_id = null, expected_username = null } = {}) {
   const magazyn = env.OAUTH_TOKENS.getByName('token-S');
+  const generacja = owner ? await env.OAUTH_TOKENS.getByName('refresh-owner').nowaGeneracjaOAuth() : null;
   // Fixture wystawia metodę zapisu przez ten sam interfejs DO co Worker.
   return magazyn.zapisz(state, 'oauth-state', {
     verifier, owner, discord_id, expected_username, created_at: Date.now(),
+    ...(owner ? { generacja } : {}),
   }, Date.now() + 600_000);
 }
 
