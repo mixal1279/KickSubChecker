@@ -33,73 +33,80 @@ function wymagajMagazynu(env, nazwa) {
 async function wykonajTestyDO(env) {
   const znacznik = crypto.randomUUID().replaceAll("-", "");
   const teraz = Date.now();
+  const runner = wymagajMagazynu(env, "staging-smoke-runner");
+  const runnerLease = await runner.zarezerwujBlokade("smoke", 120_000);
+  if (!runnerLease) return { ok: false, busy: true };
 
-  const tokenStore = wymagajMagazynu(env, `staging-token-${znacznik}`);
-  const token = `staging_${znacznik}`;
-  await tokenStore.zapisz(token, "oauth-state", { probe: znacznik }, teraz + 60_000);
-  const zuzyty = await tokenStore.zuzyj(token, "oauth-state");
-  if (zuzyty?.probe !== znacznik || await tokenStore.zuzyj(token, "oauth-state") !== null) {
-    throw new Error("Test jednorazowego tokena nie powiódł się.");
+  try {
+    const tokenStore = wymagajMagazynu(env, "staging-token-smoke");
+    const token = `staging_${znacznik}`;
+    await tokenStore.zapisz(token, "oauth-state", { probe: znacznik }, teraz + 60_000);
+    const zuzyty = await tokenStore.zuzyj(token, "oauth-state");
+    if (zuzyty?.probe !== znacznik || await tokenStore.zuzyj(token, "oauth-state") !== null) {
+      throw new Error("Test jednorazowego tokena nie powiódł się.");
+    }
+
+    const lockStore = wymagajMagazynu(env, "staging-lock-smoke");
+    const blokady = await Promise.all(
+      Array.from({ length: 16 }, () => lockStore.zarezerwujBlokade("staging-smoke", 30_000)),
+    );
+    const wlasciciele = blokady.filter(Boolean);
+    if (wlasciciele.length !== 1) throw new Error("Test wyłączności lease nie powiódł się.");
+    await lockStore.zwolnijBlokade("staging-smoke", wlasciciele[0]);
+
+    const obecne = {
+      access_token: `staging-access-before-${znacznik}`,
+      refresh_token: `staging-refresh-before-${znacznik}`,
+      expires_at: Date.now() + 120_000,
+    };
+    const refreshStore = wymagajMagazynu(env, "staging-refresh-smoke");
+    await refreshStore.zapiszTokeny(obecne);
+    const lease = await refreshStore.zarezerwujBlokade("broadcaster", 30_000);
+    if (!lease) throw new Error("Nie udało się uzyskać lease rotacji.");
+    const kandydaci = Array.from({ length: 16 }, (_, i) => ({
+      access_token: `staging-access-${znacznik}-${i}`,
+      refresh_token: `staging-refresh-${znacznik}-${i}`,
+      expires_at: Date.now() + 180_000,
+    }));
+    const wyniki = await Promise.all(kandydaci.map((dane) =>
+      refreshStore.zapiszOdswiezoneTokeny(dane, lease, obecne.refresh_token)));
+    const zapisane = await refreshStore.pobierzTokeny();
+    if (wyniki.filter(Boolean).length !== 1 || !kandydaci.some((dane) =>
+      dane.refresh_token === zapisane?.refresh_token && dane.access_token === zapisane?.access_token)) {
+      throw new Error("Test równoległego CAS refresh tokena nie powiódł się.");
+    }
+    await refreshStore.zwolnijBlokade("broadcaster", lease);
+
+    const expiryStore = wymagajMagazynu(env, "staging-expiry-smoke");
+    await expiryStore.zapiszTokeny(obecne);
+    const staryLease = await expiryStore.zarezerwujBlokade("broadcaster", 1_000);
+    if (!staryLease) throw new Error("Nie udało się uzyskać testowego lease.");
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    const nowyLease = await expiryStore.zarezerwujBlokade("broadcaster", 30_000);
+    if (!nowyLease || nowyLease === staryLease) throw new Error("Nie udało się przejąć wygasłego lease.");
+    const staryZapis = await expiryStore.zapiszOdswiezoneTokeny(
+      { access_token: "stale", refresh_token: "stale", expires_at: Date.now() + 60_000 },
+      staryLease,
+      obecne.refresh_token,
+    );
+    if (staryZapis !== false || (await expiryStore.pobierzTokeny())?.refresh_token !== obecne.refresh_token) {
+      throw new Error("Stary właściciel lease mógł zapisać token.");
+    }
+    await expiryStore.zwolnijBlokade("broadcaster", nowyLease);
+
+    return {
+      ok: true,
+      checks: {
+        sqlite_rpc: true,
+        one_time_token: true,
+        concurrent_lock_exclusivity: true,
+        concurrent_refresh_cas: true,
+        expired_lease_fencing: true,
+      },
+    };
+  } finally {
+    await runner.zwolnijBlokade("smoke", runnerLease);
   }
-
-  const lockStore = wymagajMagazynu(env, `staging-lock-${znacznik}`);
-  const blokady = await Promise.all(
-    Array.from({ length: 16 }, () => lockStore.zarezerwujBlokade("staging-smoke", 30_000)),
-  );
-  const wlasciciele = blokady.filter(Boolean);
-  if (wlasciciele.length !== 1) throw new Error("Test wyłączności lease nie powiódł się.");
-  await lockStore.zwolnijBlokade("staging-smoke", wlasciciele[0]);
-
-  const refreshStore = wymagajMagazynu(env, `staging-refresh-${znacznik}`);
-  const obecne = {
-    access_token: "staging-access-before",
-    refresh_token: "staging-refresh-before",
-    expires_at: teraz + 120_000,
-  };
-  await refreshStore.zainicjujTokeny(obecne);
-  const lease = await refreshStore.zarezerwujBlokade("broadcaster", 30_000);
-  if (!lease) throw new Error("Nie udało się uzyskać lease rotacji.");
-  const kandydaci = Array.from({ length: 16 }, (_, i) => ({
-    access_token: `staging-access-${i}`,
-    refresh_token: `staging-refresh-${i}`,
-    expires_at: Date.now() + 180_000,
-  }));
-  const wyniki = await Promise.all(kandydaci.map((dane) =>
-    refreshStore.zapiszOdswiezoneTokeny(dane, lease, obecne.refresh_token)));
-  const zapisane = await refreshStore.pobierzTokeny();
-  if (wyniki.filter(Boolean).length !== 1 || !kandydaci.some((dane) =>
-    dane.refresh_token === zapisane?.refresh_token && dane.access_token === zapisane?.access_token)) {
-    throw new Error("Test równoległego CAS refresh tokena nie powiódł się.");
-  }
-  await refreshStore.zwolnijBlokade("broadcaster", lease);
-
-  const expiryStore = wymagajMagazynu(env, `staging-expiry-${znacznik}`);
-  await expiryStore.zainicjujTokeny(obecne);
-  const staryLease = await expiryStore.zarezerwujBlokade("broadcaster", 1_000);
-  if (!staryLease) throw new Error("Nie udało się uzyskać testowego lease.");
-  await new Promise((resolve) => setTimeout(resolve, 1_100));
-  const nowyLease = await expiryStore.zarezerwujBlokade("broadcaster", 30_000);
-  if (!nowyLease || nowyLease === staryLease) throw new Error("Nie udało się przejąć wygasłego lease.");
-  const staryZapis = await expiryStore.zapiszOdswiezoneTokeny(
-    { access_token: "stale", refresh_token: "stale", expires_at: Date.now() + 60_000 },
-    staryLease,
-    obecne.refresh_token,
-  );
-  if (staryZapis !== false || (await expiryStore.pobierzTokeny())?.refresh_token !== obecne.refresh_token) {
-    throw new Error("Stary właściciel lease mógł zapisać token.");
-  }
-  await expiryStore.zwolnijBlokade("broadcaster", nowyLease);
-
-  return {
-    ok: true,
-    checks: {
-      sqlite_rpc: true,
-      one_time_token: true,
-      concurrent_lock_exclusivity: true,
-      concurrent_refresh_cas: true,
-      expired_lease_fencing: true,
-    },
-  };
 }
 
 async function odczytajBodyZLimitem(request, limit) {
@@ -166,7 +173,7 @@ async function obsluzTestStagingDO(request, env) {
   }
 
   try {
-    const store = wymagajMagazynu(env, `staging-persist-${testId.slice(0, 8)}`);
+    const store = wymagajMagazynu(env, "staging-persistence-smoke");
     const token = `staging_${testId}`;
     if (faza === "write") {
       await store.zapisz(token, "oauth-state", { test_id: testId }, Date.now() + 10 * 60_000);
