@@ -19,6 +19,7 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
       "cutover_registry",
       "cutover_state",
       "oauth_credentials",
+      "oauth_generation",
       "oauth_locks",
       "oauth_tokens",
     ]);
@@ -214,6 +215,30 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
     await expect(stub.zapiszTokeny(nowsze, nowszaGeneracja)).resolves.toBe(true);
     await expect(stub.zapiszTokeny(starsze, starszaGeneracja)).resolves.toBe(false);
     await expect(stub.pobierzTokeny()).resolves.toEqual(nowsze);
+  });
+
+  it("rotacja po imporcie istniejących tokenów nie koliduje z generacją callbacku", async () => {
+    const stub = utworzStub("oauth-generation-baseline");
+    const obecne = {
+      access_token: "access-import",
+      refresh_token: "refresh-import",
+      expires_at: Date.now() + 120_000,
+    };
+    await stub.zainicjujTokeny(obecne);
+    const generacjaCallbacku = await stub.nowaGeneracjaOAuth();
+    const lease = await stub.zarezerwujBlokade("broadcaster", 30_000);
+    expect(lease).toEqual(expect.any(String));
+
+    const odswiezone = {
+      access_token: "access-rotated",
+      refresh_token: "refresh-rotated",
+      expires_at: Date.now() + 180_000,
+    };
+    await expect(
+      stub.zapiszOdswiezoneTokeny(odswiezone, lease, obecne.refresh_token),
+    ).resolves.toBe(true);
+    await expect(stub.zapiszTokeny(obecne, generacjaCallbacku)).resolves.toBe(false);
+    await expect(stub.pobierzTokeny()).resolves.toEqual(odswiezone);
   });
 
   it("rotacja refresh tokena unieważnia callback OAuth z poprzednią generacją", async () => {
