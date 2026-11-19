@@ -184,6 +184,18 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
   });
 
 
+  it("przydziela unikalne generacje OAuth przy równoległych żądaniach", async () => {
+    const stub = utworzStub("oauth-generation-race");
+    const generacje = await Promise.all(
+      Array.from({ length: 20 }, () => stub.nowaGeneracjaOAuth()),
+    );
+
+    expect(new Set(generacje).size).toBe(20);
+    expect([...generacje].sort((a, b) => a - b)).toEqual(
+      Array.from({ length: 20 }, (_, i) => i + 1),
+    );
+  });
+
   it("odrzuca spóźniony callback OAuth po rozpoczęciu nowszej autoryzacji", async () => {
     const stub = utworzStub("oauth-callback-order");
     const starszaGeneracja = await stub.nowaGeneracjaOAuth();
