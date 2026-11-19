@@ -19,15 +19,13 @@ Do samego smoke testu Durable Objects kroki dotyczące Kick (broadcaster ID i OA
 
 1. Do późniejszych testów integracji Kick wybierz dedykowane konto/kanał testowy i odczytaj jego rzeczywisty broadcaster ID. Wpisz go do `KICK_BROADCASTER_ID` w `wrangler.staging.toml`. Nie używaj ID produkcyjnego kanału.
 2. Do późniejszych testów OAuth utwórz osobną aplikację Kick dla staging. Ustaw redirect URI zgodny z rzeczywistą domeną workers.dev staging i zarejestruj dokładnie ten sam URI w panelu Kick. Zastąp placeholder `REDIRECT_URI`.
-3. Do smoke testu Durable Objects wystarczy osobny stagingowy `ADMIN_API_SECRET`. Ustaw go bezpośrednio w staging Worker:
+3. Przed wdrożeniem zweryfikuj plik konfiguracyjny:
 
    ```bash
-   npx wrangler secret put ADMIN_API_SECRET --config wrangler.staging.toml
+   npx wrangler deploy --dry-run --config wrangler.staging.toml
    ```
 
-   Sekret musi być nowy, unikalny i nie może być równy żadnemu sekretowi produkcyjnemu. OAuth staging wymaga dodatkowo osobnych `KICK_CLIENT_ID`, `KICK_CLIENT_SECRET` i `BOT_API_SECRET`; nie są potrzebne do smoke testu DO.
-
-4. Przed wdrożeniem zweryfikuj plik konfiguracyjny:
+4. Zastosuj migracje wyłącznie do staging D1:
 
    ```bash
    npx wrangler deploy --dry-run --config wrangler.staging.toml
