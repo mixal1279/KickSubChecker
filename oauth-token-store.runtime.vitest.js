@@ -29,16 +29,22 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
   it("wycofuje wszystkie zapisy transakcji po wyjątku", async () => {
     const stub = utworzStub("rollback");
 
-    await expect(runInDurableObject(stub, (_instancja, stan) => {
-      stan.storage.transactionSync(() => {
-        stan.storage.sql.exec(
-          "INSERT INTO cutover_registry (id, broadcaster_id, backend) VALUES (1, ?, 'd1')",
-          "123456",
-        );
-        throw new Error("symulowany błąd transakcji");
-      });
-    })).rejects.toThrow("symulowany błąd transakcji");
+    const blad = await runInDurableObject(stub, (_instancja, stan) => {
+      try {
+        stan.storage.transactionSync(() => {
+          stan.storage.sql.exec(
+            "INSERT INTO cutover_registry (id, broadcaster_id, backend) VALUES (1, ?, 'd1')",
+            "123456",
+          );
+          throw new Error("symulowany błąd transakcji");
+        });
+        return null;
+      } catch (error) {
+        return error.message;
+      }
+    });
 
+    expect(blad).toBe("symulowany błąd transakcji");
     await expect(stub.pobierzGlobalnyStanCutoveru()).resolves.toBeNull();
   });
 
@@ -78,9 +84,15 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
       broadcaster_id: "123456",
       backend: "d1",
     });
-    await expect(stub.oznaczGlobalnyCutoverD1("654321")).rejects.toThrow(
-      "Rejestr cutoveru jest trwale przypisany do innego kanału Kick.",
-    );
+    const blad = await runInDurableObject(stub, async (instancja) => {
+      try {
+        await instancja.oznaczGlobalnyCutoverD1("654321");
+        return null;
+      } catch (error) {
+        return error.message;
+      }
+    });
+    expect(blad).toBe("Rejestr cutoveru jest trwale przypisany do innego kanału Kick.");
   });
 
   it("po przerwaniu między rejestrem i latchem pozwala bezpiecznie dokończyć zapis", async () => {
