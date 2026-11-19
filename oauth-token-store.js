@@ -33,6 +33,11 @@ export class OAuthTokenStore extends DurableObject {
         generation INTEGER NOT NULL
       )
     `);
+    // Istniejące poświadczenia zaczynają od generacji bazowej 0.
+    // Każdy callback i każda rotacja zwiększa ją w tej samej tabeli.
+    this.sql.exec(
+      'INSERT INTO oauth_generation (id, generation) VALUES (1, 0) ON CONFLICT(id) DO NOTHING',
+    );
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS cutover_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
