@@ -1,15 +1,36 @@
-name = "kick-sub-checker"
+name = "kick-auth"
 main = "index.js"
 compatibility_date = "2026-10-01"
 
+[triggers]
+crons = ["23 3 * * *"] # Retencja webhooków raz dziennie (UTC)
+
 [[kv_namespaces]]
 binding = "SUBS_KV"
-id = "REPLACE_WITH_REAL_KV_NAMESPACE_ID"
+id = "3d5621842e7c4dacb40095ba32311616"
 
 [vars]
-REDIRECT_URI = "https://REPLACE_WITH_WORKER_HOST/callback" # MUST be replaced before deploy
+REDIRECT_URI = "https://kick-auth.michalkowalczyk489.workers.dev/callback"
+D1_ENABLED = "false" # Set to true only after KV data migration and verification
+# Required stable channel ID: configure KICK_BROADCASTER_ID in Worker vars before deploying this version.
+MIGRATION_WRITE_FREEZE = "false" # Set true, deploy and drain in-flight writes before KV import
 
 # Configure these as Cloudflare secrets, never commit real values:
 # npx wrangler secret put KICK_CLIENT_ID
 # npx wrangler secret put KICK_CLIENT_SECRET
 # npx wrangler secret put BOT_API_SECRET
+# npx wrangler secret put ADMIN_API_SECRET (unikalny, nieudostępniany botowi)
+
+# Existing D1 target database. Apply all numbered SQL migrations before enabling D1_ENABLED.
+[[d1_databases]]
+binding = "DB"
+database_name = "kick-sub-checker"
+database_id = "8130d703-3197-41c4-b480-5dabdbf062a7"
+
+[[durable_objects.bindings]]
+name = "OAUTH_TOKENS"
+class_name = "OAuthTokenStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OAuthTokenStore"]

@@ -1,6 +1,6 @@
 # Kick Sub Checker
 
-Projekt ma dwie osobne części: `KickSubChecker.js` to bot Discord (Node.js), a `index.js` to Cloudflare Worker. Worker przyjmuje webhooki Kick, przechowuje stan subskrypcji w KV i udostępnia chronione API botowi. Konto Kick użytkownika jest wiązane z Discordem przez OAuth — ręczne wpisanie nicku nie nadaje uprawnień.
+Projekt ma dwie osobne części: `KickSubChecker.cjs` to bot Discord (Node.js), a `index.js` to Cloudflare Worker. Worker przyjmuje webhooki Kick, przechowuje stan subskrypcji w KV i udostępnia chronione API botowi. Konto Kick użytkownika jest wiązane z Discordem przez OAuth — ręczne wpisanie nicku nie nadaje uprawnień.
 
 ## Wymagania
 - Node.js 18.17 lub nowszy i npm na hostingu bota.
@@ -11,28 +11,29 @@ Projekt ma dwie osobne części: `KickSubChecker.js` to bot Discord (Node.js), a
 ## 1. Cloudflare Worker
 
 1. W katalogu projektu zaloguj Wrangler: `npx wrangler login`.
-2. Utwórz namespace: `npx wrangler kv namespace create SUBS_KV`.
-3. Wklej otrzymane ID do `wrangler.toml` zamiast `REPLACE_WITH_REAL_KV_NAMESPACE_ID`.
+2. **Przy kontynuowaniu istniejącej instalacji zachowaj obecny namespace `SUBS_KV` z `wrangler.toml`.** Sprawdź jego istnienie przez `npx wrangler kv namespace list`; nie twórz nowego namespace i nie podmieniaj ID, bo odetniesz Workera od istniejących subskrypcji, tokenów OAuth i stanu webhooków.
+3. Tylko przy zupełnie nowej instalacji utwórz namespace poleceniem `npx wrangler kv namespace create SUBS_KV` i wpisz otrzymane ID do `wrangler.toml`.
 4. Utwórz aplikację na https://dev.kick.com. W jej ustawieniach ustaw Redirect URI dokładnie na `https://TWOJ-WORKER.workers.dev/callback`.
 5. Ustaw `REDIRECT_URI` w `wrangler.toml` na ten sam adres i zastąp nazwę Workera/host w konfiguracji.
-6. Ustaw sekrety. `BOT_API_SECRET` musi być długim losowym sekretem, identycznym w Workerze i w `.env` bota:
+6. Ustaw sekrety. `BOT_API_SECRET` musi być długim losowym sekretem, identycznym w Workerze i w `.env` bota. `ADMIN_API_SECRET` musi być innym, niezależnym sekretem i nie może trafić do konfiguracji bota:
 
    ```bash
    npx wrangler secret put KICK_CLIENT_ID
    npx wrangler secret put KICK_CLIENT_SECRET
    npx wrangler secret put BOT_API_SECRET
+   npx wrangler secret put ADMIN_API_SECRET
    ```
 
-7. Przed wdrożeniem sprawdź, czy `wrangler.toml` zawiera prawdziwe ID KV oraz właściwy `REDIRECT_URI`; wartości `REPLACE_WITH_...` są tylko placeholderami.
+7. Przed wdrożeniem sprawdź, czy ID KV i D1 w `wrangler.toml` wskazują zasoby właściwego konta Cloudflare oraz czy `REDIRECT_URI` jest poprawny. Przy istniejącej instalacji nie zastępuj tych ID nowymi zasobami.
 8. Wdróż Workera: `npx wrangler deploy`.
-9. Administrator tworzy jednorazowy link OAuth właściciela kanału przez `POST https://TWOJ-WORKER.workers.dev/api/owner/start` z nagłówkiem `Authorization: Bearer TWÓJ_SEKRET`, a następnie przekazuje zwrócone `url` właścicielowi kanału (np. Ljay). Link jest jednorazowy i wygasa po 10 minutach. Właściciel zatwierdza OAuth.
+9. Administrator tworzy jednorazowy link OAuth właściciela kanału przez `POST https://TWOJ-WORKER.workers.dev/api/owner/start` z nagłówkiem `Authorization: Bearer TWÓJ_ADMIN_API_SECRET`, a następnie przekazuje zwrócone `url` właścicielowi kanału (np. Ljay). Użyj `ADMIN_API_SECRET`, nigdy `BOT_API_SECRET`. Link jest jednorazowy i wygasa po 10 minutach. Właściciel zatwierdza OAuth.
 
    ```bash
    curl -X POST 'https://TWOJ-WORKER.workers.dev/api/owner/start' \
-     -H 'Authorization: Bearer TWÓJ_SEKRET'
+     -H "Authorization: Bearer $ADMIN_API_SECRET"
    ```
    Otwórz pole `url` ze zwróconego JSON-a.
-10. Zarejestruj eventy metodą POST z nagłówkiem `Authorization: Bearer TWÓJ_SEKRET` na `https://TWOJ-WORKER.workers.dev/register-events`. Endpoint nie jest przeznaczony do otwierania w przeglądarce. Przykład:
+10. Zarejestruj eventy metodą POST z nagłówkiem `Authorization: Bearer TWÓJ_ADMIN_API_SECRET` na `https://TWOJ-WORKER.workers.dev/register-events`. Nie zapisuj `ADMIN_API_SECRET` w `.env` używanym przez bota; ustaw go tylko w środowisku administratora. Endpoint nie jest przeznaczony do otwierania w przeglądarce. Przykład:
 
    ```bash
    curl -X POST 'https://TWOJ-WORKER.workers.dev/register-events' \
@@ -53,17 +54,35 @@ Projekt ma dwie osobne części: `KickSubChecker.js` to bot Discord (Node.js), a
 ## API Workera
 - `GET /authorize?owner_token=...` — jednorazowy OAuth właściciela kanału; link generuje administrator.
 - `GET /authorize?link_token=...` — jednorazowy OAuth widza; link generuje `/polacz-konto`.
-- `POST /api/owner/start` — tworzy jednorazowy link OAuth właściciela kanału, wymaga Bearer secret.
+- `POST /api/owner/start` — tworzy jednorazowy link OAuth właściciela kanału, wymaga `ADMIN_API_SECRET`.
 - `GET /callback` — callback OAuth właściciela albo widza.
 - `POST /webhook` — podpisane eventy Kick.
-- `POST /register-events` — chroniona rejestracja eventów.
+- `POST /register-events` — administracyjna rejestracja eventów, wymaga `ADMIN_API_SECRET`.
 - `GET /api/check?username=nick` — status suba (`active`, `inactive` lub `unknown`), wymaga Bearer secret. Brak rekordu albo niepoprawna data wygaśnięcia zwraca `unknown`, a nie `inactive`.
 - `POST /api/link/start` — tworzy jednorazowy link OAuth dla ID Discorda, wymaga Bearer secret.
+- `POST /api/admin/migrate-kv` — migracja KV → D1; wymaga osobnego `ADMIN_API_SECRET` (nie `BOT_API_SECRET`), domyślnie wykonuje wyłącznie dry-run. Import uruchamia `?dry_run=false`.
 - `GET /api/link?discord_id=ID` i `GET /api/links` — zweryfikowane powiązania, wymagają Bearer secret.
 
 ## Ważne ograniczenia
 - Kick webhooki informują o nowych subskrypcjach, odnowieniach i prezentach. Przy prezentach korzystamy z `giftees` i wspólnego `expires_at` z payloadu; dokumentacja Kick odnotowywała zgłoszenia nieprawidłowych dat wygaśnięcia w niektórych webhookach, dlatego warto zweryfikować je na rzeczywistym koncie testowym. KV nie odtworzy automatycznie historii sprzed uruchomienia webhooków. Użytkownik może więc być aktywnym subskrybentem, ale nie być jeszcze znany lokalnej bazie. W takim przypadku API zwraca `unknown`, a bot nie zmienia jego roli.
 - Bot odbiera rolę tylko wtedy, gdy istnieje zapis subskrypcji z poprawną datą wygaśnięcia, która już minęła. Błąd API, brak rekordu lub niepoprawna data nie powodują odebrania roli.
+- W trybie KV webhook prezentów obsługuje maksymalnie 200 odbiorców na event (HTTP 413 powyżej limitu, bez częściowych zapisów); po przełączeniu na D1 limit wynosi 500.
 - Bot nie wykonuje automatycznego sprzątania ról osobom bez połączonego konta Kick. Takie role nie są zdejmowane tylko dlatego, że użytkownik nie ma powiązania OAuth.
 - Po wdrożeniu sprawdź testowym kontem, czy Kick wysyła webhooki do ustawionego adresu oraz czy odpowiedź rejestracji eventów jest sukcesem. Nie da się potwierdzić rzeczywistego działania integracji bez Twoich sekretów, konfiguracji Kick Developer i uprawnień serwera.
 - Nie commituj `.env`, tokenów OAuth ani sekretów. Jeśli wcześniejsze sekrety były publiczne, wygeneruj nowe.
+
+
+## Backend v2: Cloudflare D1 bez ponownego OAuth
+
+Backend v2 przechowuje powiązania, subskrypcje i webhooki w D1, a autorytatywne tokeny właściciela w SQLite Durable Object. Przy pierwszym użyciu Worker atomowo importuje istniejący zapis `ljay:tokens` z KV, więc **samo przełączenie magazynu tokenów nie wymaga ponownej autoryzacji Kick**. KV pozostaje kopią legacy tylko do jednorazowego importu; rotacja tokenów nie zapisuje już do eventual-consistent KV.
+
+Szczegółowa, bezpieczna procedura znajduje się w [docs/backend-v2-migration.md](docs/backend-v2-migration.md). Najważniejsze:
+- skonfiguruj binding D1 (`DB`) i zastosuj migracje `0001` → `0002` → `0003` → `0004` → `0005` → `0006` → `0007`;
+- instalacja obsługuje jeden kanał Kick i jeden serwer Discord;
+- pozostaw `D1_ENABLED = "false"` i wykonaj dry-run endpointu `POST /api/admin/migrate-kv`;
+- przed importem włącz `MIGRATION_WRITE_FREEZE = "true"`, wdróż konfigurację i odczekaj co najmniej 2 minuty na zakończenie żądań in-flight;
+- podczas freeze Worker blokuje webhooki, callbacki OAuth, tworzenie nowych linków i rejestrację eventów kodem 503; Kick może ponowić webhooki;
+- wykonaj import z `?dry_run=false`, sprawdź raport, stare źródła `gift`, `new`, `renewal`, konflikty oraz statusy po nicku i ID;
+- w jednym wdrożeniu przełącz `D1_ENABLED = "true"` i `MIGRATION_WRITE_FREEZE = "false"`. Nie zdejmuj freeze przed cutoverem.
+
+Nie usuwaj KV po przełączeniu — nadal przechowuje stan PKCE, jednorazowe linki i cache klucza publicznego. Tokeny właściciela są zapisywane w SQLite Durable Object. Endpoint migracyjny wymaga osobnego `ADMIN_API_SECRET`. Nie udostępniaj go botowi Discord ani nie używaj ponownie `BOT_API_SECRET`.

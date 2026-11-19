@@ -12,7 +12,7 @@ const {
 
 const CONFIG_PATH = path.join(__dirname, 'config.json');
 const SYNC_INTERVAL_MS = 10 * 60 * 1000;
-const USERNAME_RE = /^[a-zA-Z0-9_]{1,25}$/;
+const USERNAME_RE = /^[a-zA-Z0-9_-]{1,25}$/;
 
 function requireEnv(names) {
   const missing = names.filter((name) => !process.env[name]?.trim());
@@ -68,10 +68,16 @@ async function workerRequest(route, options = {}) {
     throw error;
   } finally { clearTimeout(timeout); }
 }
-async function checkSub(username) {
+async function checkSub(username, userId = null) {
   const nick = String(username || '').trim().replace(/^@/, '');
-  if (!USERNAME_RE.test(nick)) throw new Error('Nieprawidłowy nick Kick. Użyj 1–25 liter, cyfr lub podkreśleń.');
-  return workerRequest(`/api/check?username=${encodeURIComponent(nick)}`);
+  const id = userId == null ? '' : String(userId).trim();
+  if (id && !/^[0-9]{1,32}$/.test(id)) throw new Error('Nieprawidłowy ID użytkownika Kick.');
+  const poprawnyNick = USERNAME_RE.test(nick) ? nick : '';
+  if (!id && !poprawnyNick) throw new Error('Nieprawidłowy nick Kick. Użyj 1–25 liter, cyfr, podkreśleń lub myślników.');
+  const params = new URLSearchParams();
+  if (id) params.set('user_id', id);
+  if (poprawnyNick) params.set('username', poprawnyNick);
+  return workerRequest(`/api/check?${params.toString()}`);
 }
 async function getLinkedAccounts() { return workerRequest('/api/links'); }
 
@@ -104,11 +110,12 @@ async function syncRoles(logFn = console.log) {
     for (const link of links) {
       const discordId = String(link.discord_id || '');
       const username = String(link.username || '');
-      if (!/^\d{17,20}$/.test(discordId) || !USERNAME_RE.test(username)) { stats.errors++; continue; }
+      const kickUserId = String(link.kick_user_id || '');
+      if (!/^\d{17,20}$/.test(discordId) || (!USERNAME_RE.test(username) && !/^[0-9]{1,32}$/.test(kickUserId))) { stats.errors++; continue; }
       stats.checked++;
       try {
         const [data, member] = await Promise.all([
-          checkSub(username), guild.members.fetch(discordId).catch(() => null)
+          checkSub(username, kickUserId || null), guild.members.fetch(discordId).catch(() => null)
         ]);
         if (!member) continue; // Użytkownik nie należy już do serwera.
         const hasRole = member.roles.cache.has(role.id);
@@ -139,6 +146,11 @@ async function syncRoles(logFn = console.log) {
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
   try {
+    const aktualnaKonfiguracja = loadConfig();
+    if (aktualnaKonfiguracja.guildId && interaction.guildId !== aktualnaKonfiguracja.guildId) {
+      await interaction.reply({ content: 'KickSubChecker jest skonfigurowany dla innego serwera Discord.', ephemeral: true });
+      return;
+    }
     if (interaction.commandName === 'sprawdz-suba') {
       await interaction.deferReply({ ephemeral: true });
       const nick = interaction.options.getString('nick', true);
@@ -168,7 +180,7 @@ Link wygaśnie po 10 minutach. Nick wpisany ręcznie nie wystarczy do uzyskania 
       await interaction.deferReply({ ephemeral: true });
       const linked = await workerRequest(`/api/link?discord_id=${encodeURIComponent(interaction.user.id)}`);
       if (!linked.username) { await interaction.editReply('Nie masz zweryfikowanego konta Kick. Użyj `/polacz-konto`.'); return; }
-      const data = await checkSub(linked.username);
+      const data = await checkSub(linked.username, linked.kick_user_id);
       const status = data.status === 'active' || data.status === 'inactive'
         ? data.status
         : (data.subscribed === true ? 'active' : 'unknown');
@@ -186,7 +198,11 @@ Link wygaśnie po 10 minutach. Nick wpisany ręcznie nie wystarczy do uzyskania 
       if (role.managed || role.position >= botMember.roles.highest.position) {
         await interaction.reply({ content: 'Nie mogę zarządzać tą rolą. Wybierz rolę niezarządzaną i niższą od najwyższej roli bota.', ephemeral: true }); return;
       }
-      saveConfig({ ...loadConfig(), guildId: interaction.guildId, roleId: role.id });
+      const obecna = loadConfig();
+      if (obecna.guildId && obecna.guildId !== interaction.guildId) {
+        await interaction.reply({ content: 'Bot jest już przypisany do innego serwera Discord.', ephemeral: true }); return;
+      }
+      saveConfig({ ...obecna, guildId: interaction.guildId, roleId: role.id });
       await interaction.reply({ content: `Rola **${role.name}** została ustawiona. Synchronizacja odbywa się co 10 minut.`, ephemeral: true });
     } else if (interaction.commandName === 'sprawdz-teraz') {
       if (!interaction.inGuild() || !interaction.memberPermissions?.has(PermissionFlagsBits.ManageRoles)) {

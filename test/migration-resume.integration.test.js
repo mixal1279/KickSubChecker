@@ -1,0 +1,550 @@
+import './setup.js';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import worker from '../index.js';
+
+const sekret = 'test-secret';
+const sekretAdmina = 'test-admin-secret';
+const kanal = '123456789';
+const token = 'test-access-token';
+const teraz = Date.now();
+
+function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bladMarkera = false, bladImportBatch = false, bladListy = false, niekompletnaStrona = false, blokujPierwszyOdczyt = false, fazaPoczatkowa = 'links', subskrypcje = 0, countsJson = null, cursorPoczatkowy = null } = {}) {
+  const rekordy = new Map();
+  const subskrypcjeD1 = new Map();
+  const markery = new Set();
+  const konfiguracjaKv = new Map([['config:broadcaster_id', kanal]]);
+  if (fazaPoczatkowa === 'subscriptions') markery.add('links|link:discord:10000000000000000');
+  let stan = null;
+  let bladCheckpointRaz = bladCheckpoint;
+  let bladFinalizacjiRaz = bladFinalizacji;
+  let bladMarkeraRaz = bladMarkera;
+  let bladImportBatchRaz = bladImportBatch;
+  let bladListyRaz = bladListy;
+  let niekompletnaStronaRaz = niekompletnaStrona;
+  let zwolnijOdczyt;
+  let sygnalOdczytu;
+  const odczytRozpoczety = new Promise((resolve) => { sygnalOdczytu = resolve; });
+  const bramkaOdczytu = new Promise((resolve) => { zwolnijOdczyt = resolve; });
+  let zablokowano = false;
+  const wywolania = [];
+
+  const db = {
+    prepare(sql) {
+      return {
+        sql,
+        bind(...args) {
+          return {
+            sql, args,
+            async run() {
+              wywolania.push({ typ: 'run', sql, args });
+              if (sql.includes('INSERT INTO channels')) return { success: true, meta: { changes: 1 } };
+              if (sql.includes('INSERT INTO migration_runs')) {
+                const [broadcasterId, leaseToken, expiry, started, updated, current, tokenPowtorzony] = args;
+                if (!stan) {
+                  stan = { broadcaster_id: broadcasterId, status: 'running', phase: fazaPoczatkowa, cursor: null, counts_json: fazaPoczatkowa === 'subscriptions' ? JSON.stringify({ links_seen: 1, links_valid: 1, links_imported: 1, links_skipped: 0, links_conflicts: 0 }) : '{}', lease_token: leaseToken, lease_expires_at_ms: expiry, started_at_ms: started, updated_at_ms: updated };
+                  return { success: true, meta: { changes: 1 } };
+                }
+                if (stan.status !== 'completed' && (
+                  stan.lease_expires_at_ms == null
+                  || stan.lease_expires_at_ms <= current
+                  || stan.lease_token === tokenPowtorzony
+                )) {
+                  stan.lease_token = leaseToken;
+                  stan.lease_expires_at_ms = expiry;
+                  stan.updated_at_ms = updated;
+                  return { success: true, meta: { changes: 1 } };
+                }
+                return { success: true, meta: { changes: 0 } };
+              }
+              if (sql.includes('UPDATE migration_runs SET phase')) {
+                if (bladCheckpointRaz) {
+                  bladCheckpointRaz = false;
+                  throw new Error('symulowana awaria checkpointu');
+                }
+                const [phase, cursor, counts, expiry, updated, broadcasterId, leaseToken, current] = args;
+                if (!stan || stan.broadcaster_id !== broadcasterId || stan.status !== 'running' || stan.lease_token !== leaseToken || stan.lease_expires_at_ms <= current) return { success: true, meta: { changes: 0 } };
+                Object.assign(stan, { phase, cursor, counts_json: counts, lease_expires_at_ms: expiry, updated_at_ms: updated });
+                return { success: true, meta: { changes: 1 } };
+              }
+              if (sql.includes('UPDATE migration_runs SET status = \'completed\'')) {
+                if (bladFinalizacjiRaz) {
+                  bladFinalizacjiRaz = false;
+                  throw new Error('symulowana awaria finalizacji');
+                }
+                const [completed, updated, broadcasterId, leaseToken, current] = args;
+                if (!stan || stan.broadcaster_id !== broadcasterId || stan.lease_token !== leaseToken || stan.lease_expires_at_ms <= current) return { success: true, meta: { changes: 0 } };
+                Object.assign(stan, { status: 'completed', phase: 'completed', cursor: null, lease_token: null, lease_expires_at_ms: null, completed_at_ms: completed, updated_at_ms: updated });
+                return { success: true, meta: { changes: 1 } };
+              }
+              if (sql.includes('UPDATE migration_runs SET lease_token = NULL')) {
+                const [updated, broadcasterId, leaseToken] = args;
+                if (stan?.broadcaster_id === broadcasterId && stan.status === 'running' && stan.lease_token === leaseToken) {
+                  Object.assign(stan, { lease_token: null, lease_expires_at_ms: null, updated_at_ms: updated });
+                  return { success: true, meta: { changes: 1 } };
+                }
+                return { success: true, meta: { changes: 0 } };
+              }
+              throw new Error('Nieobsługiwane SQL run: ' + sql);
+            },
+            async first() {
+              wywolania.push({ typ: 'first', sql, args });
+              if (sql.includes('FROM migration_runs')) return stan ? { ...stan } : null;
+              if (sql.includes('FROM migration_items')) {
+                if (sql.includes('SUM(CASE')) {
+                  const links = [...markery].filter(x => x.startsWith('links|')).length;
+                  const subscriptions = [...markery].filter(x => x.startsWith('subscriptions|')).length;
+                  return { links, subscriptions, total: links + subscriptions };
+                }
+                if (sql.includes("phase = 'links'")) return markery.has('links|' + args[1]) ? { imported: 1 } : null;
+                if (sql.includes("phase = 'subscriptions'")) return markery.has('subscriptions|' + args[1]) ? { imported: 1 } : null;
+              }
+              throw new Error('Nieobsługiwane SQL first: ' + sql);
+            },
+          };
+        },
+      };
+    },
+    async batch(polecenia) {
+      wywolania.push({ typ: 'batch', liczba: polecenia.length });
+      if (bladImportBatchRaz && polecenia.length === 3 && polecenia[0].sql.includes('INSERT INTO account_links')) {
+        bladImportBatchRaz = false;
+        throw new Error('symulowana awaria D1 batch');
+      }
+      if (polecenia.length === 2 && polecenia[0].sql.includes('INSERT INTO channels') && polecenia[1].sql.includes('INSERT INTO migration_runs')) {
+        const [kanalId, nick, created, updated, sprawdzKanal, current, tokenNowy] = polecenia[0].args;
+        const aktywny = stan && stan.status === 'running' && stan.lease_expires_at_ms > current && stan.lease_token !== tokenNowy;
+        if (!aktywny) wywolania.push({ typ: 'channel_upsert', kanalId, nick });
+        const [broadcasterId, leaseToken, expiry, started, changed, now, tokenAgain] = polecenia[1].args;
+        let zmiany = 0;
+        if (!aktywny && (!stan || stan.status !== 'completed') && (!stan || stan.lease_expires_at_ms == null || stan.lease_expires_at_ms <= now || stan.lease_token === tokenAgain)) {
+          if (!stan) stan = { broadcaster_id: broadcasterId, status: 'running', phase: fazaPoczatkowa, cursor: cursorPoczatkowy, counts_json: countsJson ?? (fazaPoczatkowa === 'subscriptions' ? JSON.stringify({ links_seen: 1, links_valid: 1, links_imported: 1, links_skipped: 0, links_conflicts: 0 }) : '{}'), lease_token: leaseToken, lease_expires_at_ms: expiry, started_at_ms: started, updated_at_ms: changed };
+          else Object.assign(stan, { lease_token: leaseToken, lease_expires_at_ms: expiry, updated_at_ms: changed });
+          zmiany = 1;
+        }
+        return [{ success: true, meta: { changes: aktywny ? 0 : 1 } }, { success: true, meta: { changes: zmiany } }];
+      }
+      const leaseAktywny = (broadcasterId, leaseToken) => Boolean(
+        stan && stan.broadcaster_id === broadcasterId && stan.status === 'running'
+        && stan.lease_token === leaseToken && stan.lease_expires_at_ms > Date.now()
+      );
+      for (const polecenie of polecenia) {
+        if (polecenie.sql.includes('INSERT INTO account_links')) {
+          const [broadcasterId, discordId, kickId, username, linkedAt, updatedAt, leaseBroadcaster, leaseToken] = polecenie.args;
+          if (!leaseAktywny(leaseBroadcaster, leaseToken)) continue;
+          const key = broadcasterId + '|' + discordId;
+          if (!rekordy.has(key)) rekordy.set(key, { kickId, username, linkedAt, updatedAt });
+        } else if (polecenie.sql.includes('INSERT OR IGNORE INTO migration_items') && polecenie.sql.includes("'links'")) {
+          const [broadcasterId, sourceKey, importedAt, checkBroadcaster, discordId, kickId, leaseBroadcaster, leaseToken] = polecenie.args;
+          const link = rekordy.get(checkBroadcaster + '|' + discordId);
+          if (link?.kickId === kickId && leaseAktywny(leaseBroadcaster, leaseToken)) markery.add('links|' + sourceKey);
+        } else if (polecenie.sql.includes('INSERT OR IGNORE INTO migration_items') && polecenie.sql.includes("'subscriptions'")) {
+          const [broadcasterId, sourceKey, importedAt, leaseBroadcaster, leaseToken] = polecenie.args;
+          if (leaseAktywny(leaseBroadcaster, leaseToken)) markery.add('subscriptions|' + sourceKey);
+        } else if (polecenie.sql.includes('INSERT INTO subscriptions')) {
+          const [broadcasterId, subscriberKey, kickId, , , username, expiry, source, , , , leaseBroadcaster, leaseToken] = polecenie.args;
+          if (leaseAktywny(leaseBroadcaster, leaseToken)) subskrypcjeD1.set(broadcasterId + '|' + subscriberKey, { kickId, username, expiry, source });
+        } else if (polecenie.sql.includes('SELECT CASE WHEN EXISTS')) {
+          continue;
+        } else {
+          throw new Error('Nieobsługiwane SQL batch: ' + polecenie.sql);
+        }
+      }
+      return polecenia.map((polecenie) => {
+        const wynik = { success: true, meta: { changes: 1 }, results: [] };
+        if (polecenie.sql.includes('SELECT CASE WHEN EXISTS')) {
+          const args = polecenie.args;
+          const lease = leaseAktywny(args[0], args[1]);
+          const phase = polecenie.sql.includes("phase = 'links'") ? 'links' : 'subscriptions';
+          wynik.results = [{ imported: lease && markery.has(phase + '|' + args[3]) ? 1 : (lease ? 0 : -1) }];
+        }
+        return wynik;
+      });
+    },
+  };
+
+  const wpisy = new Map();
+  for (let i = 0; i < subskrypcje; i++) {
+    const username = 'Sub' + i;
+    wpisy.set('sub:' + username.toLowerCase(), { username, user_id: String(300000000 + i), expires_at: new Date(Date.now() + 86400000).toISOString(), source: 'admin' });
+  }
+  for (let i = 0; i < (fazaPoczatkowa === 'subscriptions' ? 0 : 50); i++) {
+    const discordId = String(10000000000000000n + BigInt(i));
+    const kickId = String(200000000 + i);
+    const key = 'link:discord:' + discordId;
+    wpisy.set(key, { discord_id: discordId, kick_user_id: kickId, username: 'Widz' + i });
+  }
+
+  let tokenyWlasciciela = null;
+  let blokadaOdswiezania = false;
+  let stanCutoveru = null;
+  let stanGlobalnyCutoveru = null;
+  const env = {
+    OAUTH_TOKENS: {
+      getByName(nazwa) {
+        if (nazwa === 'cutover-registry') {
+          return {
+            async pobierzGlobalnyStanCutoveru() {
+              return stanGlobalnyCutoveru ? { ...stanGlobalnyCutoveru } : null;
+            },
+            async oznaczGlobalnyCutoverD1(id) {
+              if (stanGlobalnyCutoveru && stanGlobalnyCutoveru.broadcaster_id !== id) {
+                throw new Error('installation broadcaster mismatch');
+              }
+              stanGlobalnyCutoveru = { broadcaster_id: id, backend: 'd1' };
+              return true;
+            },
+          };
+        }
+        if (nazwa.startsWith('cutover-')) {
+          const broadcasterId = nazwa.slice('cutover-'.length);
+          return {
+            async pobierzStanCutoveru(id) {
+              if (stanCutoveru && stanCutoveru.broadcaster_id !== id) throw new Error('broadcaster mismatch');
+              return stanCutoveru?.backend || null;
+            },
+            async oznaczCutoverD1(id) {
+              if (id !== broadcasterId || (stanCutoveru && stanCutoveru.broadcaster_id !== id)) {
+                throw new Error('broadcaster mismatch');
+              }
+              stanCutoveru = { broadcaster_id: id, backend: 'd1' };
+              return true;
+            },
+          };
+        }
+        assert.equal(nazwa, 'refresh-owner');
+        return {
+          async pobierzTokeny() { return tokenyWlasciciela; },
+          async nowaGeneracjaOAuth() { return 1; },
+          async zainicjujTokeny(dane) {
+            if (!tokenyWlasciciela) tokenyWlasciciela = { ...dane };
+            return { ...tokenyWlasciciela };
+          },
+          async zapiszTokeny(dane) { tokenyWlasciciela = { ...dane }; return true; },
+          async zapiszOdswiezoneTokeny(dane) {
+            tokenyWlasciciela = { ...dane };
+            return true;
+          },
+          async zarezerwujBlokade() {
+            if (blokadaOdswiezania) return null;
+            blokadaOdswiezania = true;
+            return 'test-lease';
+          },
+          async zwolnijBlokade(_nazwa, id) {
+            if (id !== 'test-lease' || !blokadaOdswiezania) return false;
+            blokadaOdswiezania = false;
+            return true;
+          },
+        };
+      },
+    },
+    BOT_API_SECRET: sekret,
+    ADMIN_API_SECRET: sekretAdmina,
+    KICK_BROADCASTER_ID: kanal,
+    D1_ENABLED: 'false',
+    MIGRATION_WRITE_FREEZE: 'true',
+    DB: db,
+    SUBS_KV: {
+      async get(key, type) {
+        if (konfiguracjaKv.has(key)) return konfiguracjaKv.get(key);
+        if (key === 'ljay:tokens') return { access_token: token, refresh_token: 'refresh', expires_at: Date.now() + 300000 };
+        if (key.startsWith('link:discord:')) {
+          if (blokujPierwszyOdczyt && !zablokowano) {
+            zablokowano = true;
+            sygnalOdczytu();
+            await bramkaOdczytu;
+          }
+          const value = wpisy.get(key) ?? null;
+          return type === 'json' ? value : value;
+        }
+        if (key.startsWith('sub:')) {
+          const value = wpisy.get(key) ?? null;
+          return type === 'json' ? value : value;
+        }
+        return null;
+      },
+      async list({ prefix, cursor, limit = 1000 }) {
+        if (bladListyRaz) {
+          bladListyRaz = false;
+          throw new Error('symulowana awaria KV list');
+        }
+        if (niekompletnaStronaRaz) {
+          niekompletnaStronaRaz = false;
+          return { keys: [], list_complete: false };
+        }
+        const keys = [...wpisy.keys()].filter(key => key.startsWith(prefix)).sort();
+        const offset = cursor == null ? 0 : Number(cursor);
+        if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1) {
+          throw new Error('Nieprawidłowy cursor lub limit KV.');
+        }
+        const wybrane = keys.slice(offset, offset + limit);
+        const nastepnyOffset = offset + wybrane.length;
+        const listComplete = nastepnyOffset >= keys.length;
+        return {
+          keys: wybrane.map(name => ({ name })),
+          list_complete: listComplete,
+          ...(listComplete ? {} : { cursor: String(nastepnyOffset) }),
+        };
+      },
+      async put(key, value) {
+        if (key === 'config:d1_cutover_complete' && bladMarkeraRaz) {
+          bladMarkeraRaz = false;
+          throw new Error('symulowana awaria zapisu markera cutoveru');
+        }
+        if (!['config:broadcaster_id', 'config:d1_cutover_complete'].includes(key)) {
+          throw new Error('Migracja nie powinna zapisywać danych biznesowych do KV.');
+        }
+        if (key === 'config:d1_cutover_complete' && value !== kanal) {
+          throw new Error('Marker cutoveru musi wskazywać właściwy kanał.');
+        }
+        konfiguracjaKv.set(key, value);
+      },
+      async delete() { throw new Error('Migracja nie powinna usuwać KV.'); },
+    },
+  };
+
+  return {
+    env, stan: () => stan, rekordy, subskrypcjeD1, markery, konfiguracjaKv, wywolania,
+    odczytRozpoczety, odblokujOdczyt: zwolnijOdczyt,
+  };
+}
+
+function requestMigracji() {
+  return new Request('https://worker.test/api/admin/migrate-kv?dry_run=false', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + sekretAdmina },
+  });
+}
+
+async function zFetchiemKick(fn) {
+  const poprzedniFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.equal(String(url), 'https://api.kick.com/public/v1/users');
+    return new Response(JSON.stringify({ data: [{ user_id: kanal, username: 'testchannel' }] }), { status: 200 });
+  };
+  try { return await fn(); } finally { globalThis.fetch = poprzedniFetch; }
+}
+
+test('handler wznawia import 50 linków po awarii checkpointu i paginuje po 16', async () => {
+  const srodowisko = utworzSrodowisko({ bladCheckpoint: true });
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.rekordy.size, 16);
+    assert.equal(srodowisko.markery.size, 16);
+    assert.equal(srodowisko.stan().phase, 'links');
+    assert.equal(srodowisko.stan().cursor, null);
+    assert.equal(JSON.parse(srodowisko.stan().counts_json).links_seen ?? 0, 0);
+
+    const wznowiona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(wznowiona.status, 200);
+    const raport = await wznowiona.json();
+    assert.equal(raport.processed_this_request, 16);
+    assert.equal(raport.links_imported, 16);
+    assert.equal(raport.has_more, true);
+    assert.equal(srodowisko.stan().cursor, '16');
+
+    const drugaStrona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(drugaStrona.status, 200);
+    const raportDrugi = await drugaStrona.json();
+    assert.equal(raportDrugi.processed_this_request, 16);
+    assert.equal(raportDrugi.links_imported, 32);
+    assert.equal(srodowisko.stan().cursor, '32');
+
+    const trzeciaStrona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(trzeciaStrona.status, 200);
+    const raportTrzeci = await trzeciaStrona.json();
+    assert.equal(raportTrzeci.processed_this_request, 16);
+    assert.equal(raportTrzeci.links_imported, 48);
+    assert.equal(srodowisko.stan().cursor, '48');
+
+    const czwartaStrona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(czwartaStrona.status, 200);
+    const raportCzwarty = await czwartaStrona.json();
+    assert.equal(raportCzwarty.processed_this_request, 2);
+    assert.equal(raportCzwarty.links_imported, 50);
+    assert.equal(srodowisko.rekordy.size, 50);
+    assert.equal(srodowisko.markery.size, 50);
+    assert.equal(srodowisko.stan().phase, 'subscriptions');
+    assert.equal(srodowisko.stan().cursor, null);
+    assert.equal(JSON.parse(srodowisko.stan().counts_json).links_seen, 50);
+  });
+});
+
+test('drugi request handlera dostaje 409, gdy pierwszy utrzymuje lease', async () => {
+  const srodowisko = utworzSrodowisko({ blokujPierwszyOdczyt: true });
+  await zFetchiemKick(async () => {
+    const pierwszyPromise = worker.fetch(requestMigracji(), srodowisko.env);
+    await srodowisko.odczytRozpoczety;
+    const drugi = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(drugi.status, 409);
+    assert.equal((await drugi.json()).error, 'migration_locked');
+    srodowisko.odblokujOdczyt();
+    const pierwszy = await pierwszyPromise;
+    assert.equal(pierwszy.status, 200);
+    assert.equal(srodowisko.rekordy.size, 16);
+  });
+});
+
+
+test('handler wznowi import subskrypcji po awarii checkpointu bez duplikatów', async () => {
+  const srodowisko = utworzSrodowisko({ bladCheckpoint: true, fazaPoczatkowa: 'subscriptions', subskrypcje: 3 });
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal([...srodowisko.markery].filter((x) => x.startsWith('subscriptions|')).length, 3);
+    assert.equal(srodowisko.stan().phase, 'subscriptions');
+    assert.equal(srodowisko.stan().cursor, null);
+
+    const wznowiona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(wznowiona.status, 200);
+    const raport = await wznowiona.json();
+    assert.equal(raport.complete, true);
+    assert.equal(raport.subscriptions_imported, 3);
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal([...srodowisko.markery].filter((x) => x.startsWith('subscriptions|')).length, 3);
+  });
+});
+
+test('zablokowane żądanie nie wykonuje upsertu kanału', async () => {
+  const srodowisko = utworzSrodowisko({ blokujPierwszyOdczyt: true });
+  await zFetchiemKick(async () => {
+    const pierwszyPromise = worker.fetch(requestMigracji(), srodowisko.env);
+    await srodowisko.odczytRozpoczety;
+    const liczbaUpsertowPrzed = srodowisko.wywolania.filter((x) => x.typ === 'channel_upsert').length;
+    const drugi = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(drugi.status, 409);
+    assert.equal(srodowisko.wywolania.filter((x) => x.typ === 'channel_upsert').length, liczbaUpsertowPrzed);
+    srodowisko.odblokujOdczyt();
+    await pierwszyPromise;
+  });
+});
+
+
+test('wznowienie po awarii finalizacji nie przetwarza ponownie stron KV', async () => {
+  const srodowisko = utworzSrodowisko({
+    bladFinalizacji: true, fazaPoczatkowa: 'subscriptions', subskrypcje: 3,
+  });
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.stan().status, 'running');
+    assert.equal(srodowisko.stan().phase, 'completed');
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    const licznikiPoPierwszej = JSON.parse(srodowisko.stan().counts_json);
+
+    const wznowiona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(wznowiona.status, 200);
+    const raport = await wznowiona.json();
+    assert.equal(raport.complete, true);
+    assert.equal(raport.processed_this_request, 0);
+    assert.equal(raport.subscriptions_seen, 3);
+    assert.equal(raport.subscriptions_valid, 3);
+    assert.equal(raport.subscriptions_imported, 3);
+    assert.deepEqual(JSON.parse(srodowisko.stan().counts_json), licznikiPoPierwszej);
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal(srodowisko.stan().status, 'completed');
+    assert.equal(srodowisko.konfiguracjaKv.get('config:d1_cutover_complete'), kanal);
+  });
+});
+
+
+test('odrzuca counts_json będące tablicą i zwalnia lease', async () => {
+  const srodowisko = utworzSrodowisko({ countsJson: '[]' });
+  await zFetchiemKick(async () => {
+    const response = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(response.status, 500);
+    assert.equal(srodowisko.stan().lease_token, null);
+    assert.equal(srodowisko.rekordy.size, 0);
+  });
+});
+
+test('odrzuca niekompletny cursor przed odczytem strony KV', async () => {
+  const srodowisko = utworzSrodowisko({ cursorPoczatkowy: 123 });
+  let listy = 0;
+  const oryginalnaLista = srodowisko.env.SUBS_KV.list;
+  srodowisko.env.SUBS_KV.list = async (...args) => {
+    listy++;
+    return oryginalnaLista(...args);
+  };
+  await zFetchiemKick(async () => {
+    const response = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(response.status, 500);
+    assert.equal(listy, 0);
+    assert.equal(srodowisko.stan().lease_token, null);
+  });
+});
+
+
+test('awaria KV list zwalnia lease i pozwala bezpiecznie ponowić stronę', async () => {
+  const srodowisko = utworzSrodowisko({ bladListy: true });
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.stan().lease_token, null);
+    assert.equal(srodowisko.rekordy.size, 0);
+
+    const retry = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(retry.status, 200);
+    assert.equal(srodowisko.rekordy.size, 16);
+    assert.equal(srodowisko.stan().cursor, '16');
+  });
+});
+
+test('awaria D1 batch nie zapisuje markerów ani rekordów i pozwala ponowić stronę', async () => {
+  const srodowisko = utworzSrodowisko({ bladImportBatch: true });
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.stan().lease_token, null);
+    assert.equal(srodowisko.rekordy.size, 0);
+    assert.equal(srodowisko.markery.size, 0);
+
+    const retry = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(retry.status, 200);
+    assert.equal(srodowisko.rekordy.size, 16);
+    assert.equal(srodowisko.markery.size, 16);
+  });
+});
+
+test('odrzuca stronę KV bez kursora przy list_complete=false', async () => {
+  const srodowisko = utworzSrodowisko({ niekompletnaStrona: true });
+  await zFetchiemKick(async () => {
+    const response = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(response.status, 500);
+    assert.equal(srodowisko.stan().lease_token, null);
+    assert.equal(srodowisko.rekordy.size, 0);
+    assert.equal(srodowisko.markery.size, 0);
+  });
+});
+
+
+test('awaria zapisu markera po ukończeniu D1 pozwala wznowić cutover bez ponownego importu', async () => {
+  const srodowisko = utworzSrodowisko({
+    fazaPoczatkowa: 'subscriptions', subskrypcje: 3, bladMarkera: true,
+  });
+  let odczytyStronKv = 0;
+  const lista = srodowisko.env.SUBS_KV.list;
+  srodowisko.env.SUBS_KV.list = async (...args) => {
+    odczytyStronKv++;
+    return lista(...args);
+  };
+
+  await zFetchiemKick(async () => {
+    const pierwsza = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(pierwsza.status, 500);
+    assert.equal(srodowisko.stan().status, 'completed');
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal([...srodowisko.markery].filter((x) => x.startsWith('subscriptions|')).length, 3);
+    assert.equal(srodowisko.konfiguracjaKv.has('config:d1_cutover_complete'), false);
+    const liczbaOdczytowPoAwarii = odczytyStronKv;
+
+    const wznowiona = await worker.fetch(requestMigracji(), srodowisko.env);
+    assert.equal(wznowiona.status, 200);
+    assert.equal((await wznowiona.json()).already_completed, true);
+    assert.equal(odczytyStronKv, liczbaOdczytowPoAwarii);
+    assert.equal(srodowisko.subskrypcjeD1.size, 3);
+    assert.equal(srodowisko.konfiguracjaKv.get('config:d1_cutover_complete'), kanal);
+  });
+});
