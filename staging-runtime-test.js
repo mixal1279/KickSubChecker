@@ -62,6 +62,8 @@ async function wykonajTestyDO(env) {
     const refreshStore = wymagajMagazynu(env, "staging-refresh-smoke");
     const generacjaRefresh = await refreshStore.nowaGeneracjaOAuth();
     await refreshStore.zapiszTokeny(obecne, generacjaRefresh);
+    // Symuluje callback, który rozpoczął się przed zakończeniem rotacji refresh tokena.
+    const generacjaSpóźnionegoCallbacku = await refreshStore.nowaGeneracjaOAuth();
     const lease = await refreshStore.zarezerwujBlokade("broadcaster", 30_000);
     if (!lease) throw new Error("Nie udało się uzyskać lease rotacji.");
     const kandydaci = Array.from({ length: 16 }, (_, i) => ({
@@ -75,6 +77,15 @@ async function wykonajTestyDO(env) {
     if (wyniki.filter(Boolean).length !== 1 || !kandydaci.some((dane) =>
       dane.refresh_token === zapisane?.refresh_token && dane.access_token === zapisane?.access_token)) {
       throw new Error("Test równoległego CAS refresh tokena nie powiódł się.");
+    }
+    const spóźnionyCallback = await refreshStore.zapiszTokeny({
+      access_token: "stale-callback-access",
+      refresh_token: "stale-callback-refresh",
+      expires_at: Date.now() + 60_000,
+    }, generacjaSpóźnionegoCallbacku);
+    if (spóźnionyCallback !== false
+      || (await refreshStore.pobierzTokeny())?.refresh_token !== zapisane.refresh_token) {
+      throw new Error("Fencing generacji nie odrzucił spóźnionego callbacku OAuth.");
     }
     await refreshStore.zwolnijBlokade("broadcaster", lease);
 
@@ -103,6 +114,7 @@ async function wykonajTestyDO(env) {
         one_time_token: true,
         concurrent_lock_exclusivity: true,
         concurrent_refresh_cas: true,
+        oauth_callback_generation_fencing: true,
         expired_lease_fencing: true,
       },
     };
