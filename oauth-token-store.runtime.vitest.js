@@ -182,4 +182,62 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
     await expect(pierwszy.pobierzStanCutoveru("111111")).resolves.toBe("d1");
     await expect(drugi.pobierzStanCutoveru("222222")).resolves.toBeNull();
   });
+
+
+  it("po utracie lease odrzuca zapis starego właściciela", async () => {
+    const stub = utworzStub("expired-lease");
+    const obecne = {
+      access_token: "access-przed",
+      refresh_token: "refresh-przed",
+      expires_at: Date.now() + 120_000,
+    };
+    const nowe = {
+      access_token: "access-po",
+      refresh_token: "refresh-po",
+      expires_at: Date.now() + 180_000,
+    };
+
+    await stub.zainicjujTokeny(obecne);
+    const staraBlokada = await stub.zarezerwujBlokade("broadcaster", 1_000);
+    expect(staraBlokada).toEqual(expect.any(String));
+
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    const nowaBlokada = await stub.zarezerwujBlokade("broadcaster", 30_000);
+    expect(nowaBlokada).toEqual(expect.any(String));
+    expect(nowaBlokada).not.toBe(staraBlokada);
+
+    await expect(
+      stub.zapiszOdswiezoneTokeny(nowe, staraBlokada, obecne.refresh_token),
+    ).resolves.toBe(false);
+    await expect(stub.pobierzTokeny()).resolves.toEqual(obecne);
+
+    await expect(
+      stub.zapiszOdswiezoneTokeny(nowe, nowaBlokada, obecne.refresh_token),
+    ).resolves.toBe(true);
+    await expect(stub.pobierzTokeny()).resolves.toEqual(nowe);
+  });
+
+  it("atomowo przyznaje tylko jedną równoległą rotację dla tego samego refresh tokena", async () => {
+    const stub = utworzStub("refresh-cas-race");
+    const obecne = {
+      access_token: "access-start",
+      refresh_token: "refresh-start",
+      expires_at: Date.now() + 120_000,
+    };
+    await stub.zainicjujTokeny(obecne);
+    const blokada = await stub.zarezerwujBlokade("broadcaster", 30_000);
+    expect(blokada).toEqual(expect.any(String));
+
+    const kandydaci = Array.from({ length: 20 }, (_, i) => ({
+      access_token: `access-${i}`,
+      refresh_token: `refresh-${i}`,
+      expires_at: Date.now() + 180_000,
+    }));
+    const wyniki = await Promise.all(kandydaci.map((dane) =>
+      stub.zapiszOdswiezoneTokeny(dane, blokada, obecne.refresh_token)));
+
+    expect(wyniki.filter(Boolean)).toHaveLength(1);
+    const zapisane = await stub.pobierzTokeny();
+    expect(kandydaci).toContainEqual(zapisane);
+  });
 });
