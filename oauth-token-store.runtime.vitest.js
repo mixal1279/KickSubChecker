@@ -184,8 +184,10 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
   });
 
 
-  it("odrzuca spóźniony callback OAuth, który próbuje nadpisać nowszą autoryzację", async () => {
+  it("odrzuca spóźniony callback OAuth po rozpoczęciu nowszej autoryzacji", async () => {
     const stub = utworzStub("oauth-callback-order");
+    const starszaGeneracja = await stub.nowaGeneracjaOAuth();
+    const nowszaGeneracja = await stub.nowaGeneracjaOAuth();
     const nowsze = {
       access_token: "access-nowszy",
       refresh_token: "refresh-nowszy",
@@ -197,13 +199,14 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
       expires_at: Date.now() + 120_000,
     };
 
-    await expect(stub.zapiszTokeny(nowsze, 2_000)).resolves.toBe(true);
-    await expect(stub.zapiszTokeny(starsze, 1_000)).resolves.toBe(false);
+    await expect(stub.zapiszTokeny(nowsze, nowszaGeneracja)).resolves.toBe(true);
+    await expect(stub.zapiszTokeny(starsze, starszaGeneracja)).resolves.toBe(false);
     await expect(stub.pobierzTokeny()).resolves.toEqual(nowsze);
   });
 
-  it("rotacja refresh tokena blokuje callback OAuth rozpoczęty wcześniej", async () => {
+  it("rotacja refresh tokena unieważnia callback OAuth z poprzednią generacją", async () => {
     const stub = utworzStub("oauth-callback-after-refresh");
+    const generacja = await stub.nowaGeneracjaOAuth();
     const obecne = {
       access_token: "access-przed",
       refresh_token: "refresh-przed",
@@ -214,7 +217,6 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
       refresh_token: "refresh-po",
       expires_at: Date.now() + 180_000,
     };
-    const rozpoczecieStarszegoOAuth = Date.now() - 1_000;
 
     await stub.zainicjujTokeny(obecne);
     const lease = await stub.zarezerwujBlokade("broadcaster", 30_000);
@@ -227,7 +229,7 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
         access_token: "access-z-opoznionego-callbacku",
         refresh_token: "refresh-z-opoznionego-callbacku",
         expires_at: Date.now() + 120_000,
-      }, rozpoczecieStarszegoOAuth),
+      }, generacja),
     ).resolves.toBe(false);
     await expect(stub.pobierzTokeny()).resolves.toEqual(odswiezone);
     await stub.zwolnijBlokade("broadcaster", lease);
