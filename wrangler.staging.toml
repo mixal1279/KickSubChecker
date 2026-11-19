@@ -1,0 +1,29 @@
+name = "kick-auth-staging"
+main = "index.js"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+# Osobny Worker staging. Nie dziedziczy bindingów z wrangler.toml.
+[vars]
+REDIRECT_URI = "https://kick-auth-staging.REPLACE_WITH_WORKERS_DEV_SUBDOMAIN.workers.dev/callback"
+D1_ENABLED = "false"
+KICK_BROADCASTER_ID = "SET_BY_OPERATOR"
+MIGRATION_WRITE_FREEZE = "true"
+
+[[kv_namespaces]]
+binding = "SUBS_KV"
+id = "c27d49388a2543c6a681746ace9ca76c"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "kick-sub-checker-staging"
+database_id = "f3bfc99f-7d6b-4c3d-98bb-f47b3ebc445b"
+
+[[durable_objects.bindings]]
+name = "OAUTH_TOKENS"
+class_name = "OAuthTokenStore"
+
+# Nowy Worker otrzyma własny namespace SQLite DO przy pierwszym deployu.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OAuthTokenStore"]
