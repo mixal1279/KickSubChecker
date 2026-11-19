@@ -15,9 +15,11 @@ Baza `kick-sub-checker-test` pozostaje osobnym zasobem używanym przez testy int
 
 ## Wymagane działania operatora
 
-1. Wybierz dedykowane testowe konto/kanał Kick i odczytaj jego rzeczywisty broadcaster ID. Wpisz go do `KICK_BROADCASTER_ID` w `wrangler.staging.toml`. Nie używaj ID produkcyjnego kanału.
-2. Utwórz osobną aplikację OAuth Kick dla staging. Ustaw redirect URI zgodny z rzeczywistą domeną workers.dev staging i zarejestruj dokładnie ten sam URI w panelu Kick. Zastąp placeholder `REDIRECT_URI`.
-3. Do samego testu Durable Objects wystarczy osobny stagingowy `ADMIN_API_SECRET`. Ustaw go bezpośrednio w staging Worker:
+Do samego smoke testu Durable Objects kroki dotyczące Kick (broadcaster ID i OAuth) nie są potrzebne. Placeholdery `KICK_BROADCASTER_ID` i `REDIRECT_URI` mogą pozostać bez zmian, ponieważ stagingowy endpoint testowy jest obsługiwany przed routingiem aplikacji. Te dwie wartości są wymagane dopiero do testów OAuth, webhooków i migracji D1.
+
+1. Do późniejszych testów integracji Kick wybierz dedykowane konto/kanał testowy i odczytaj jego rzeczywisty broadcaster ID. Wpisz go do `KICK_BROADCASTER_ID` w `wrangler.staging.toml`. Nie używaj ID produkcyjnego kanału.
+2. Do późniejszych testów OAuth utwórz osobną aplikację Kick dla staging. Ustaw redirect URI zgodny z rzeczywistą domeną workers.dev staging i zarejestruj dokładnie ten sam URI w panelu Kick. Zastąp placeholder `REDIRECT_URI`.
+3. Do smoke testu Durable Objects wystarczy osobny stagingowy `ADMIN_API_SECRET`. Ustaw go bezpośrednio w staging Worker:
 
    ```bash
    npx wrangler secret put ADMIN_API_SECRET --config wrangler.staging.toml
