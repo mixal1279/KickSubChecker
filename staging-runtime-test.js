@@ -189,4 +189,10 @@ export default {
     }
     return worker.fetch(request, env, ctx);
   },
+
+  async scheduled(event, env, ctx) {
+    if (typeof worker.scheduled === "function") {
+      return worker.scheduled(event, env, ctx);
+    }
+  },
 };
