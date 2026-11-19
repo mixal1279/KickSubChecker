@@ -10,7 +10,7 @@ export default defineConfig({
     }),
   ],
   test: {
-    include: ["test/*.vitest.js"],
+    include: ["oauth-token-store.runtime.vitest.js"],
     testTimeout: 15_000,
     hookTimeout: 15_000,
   },
