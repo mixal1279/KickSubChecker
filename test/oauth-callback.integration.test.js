@@ -47,6 +47,7 @@ function utworzEnv({ freeze = 'false', awariaZapisu = false } = {}) {
     },
     async pobierzTokeny() { return tokeny; },
     async zainicjujTokeny(dane) { tokeny ??= dane; return tokeny; },
+    async nowaGeneracjaOAuth() { return 1; },
     async zapiszTokeny(dane) {
       if (awariaZapisu) throw new Error('durable object unavailable');
       tokeny = dane;
