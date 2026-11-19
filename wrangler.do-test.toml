@@ -1,0 +1,11 @@
+name = "kick-sub-checker-do-tests"
+main = "index.js"
+compatibility_date = "2026-10-01"
+
+[[durable_objects.bindings]]
+name = "OAUTH_TOKENS"
+class_name = "OAuthTokenStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OAuthTokenStore"]
