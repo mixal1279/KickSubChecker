@@ -340,7 +340,10 @@ async function saveTokens(env, tokens, opcje = {}) {
     if (!zapisano) throw new Error('Odrzucono zapis tokenów: blokada wygasła lub refresh token został już zmieniony.');
     return;
   }
-  await magazyn.zapiszTokeny(dane);
+  const zapisano = await magazyn.zapiszTokeny(dane, opcje.issuedAt ?? Date.now());
+  if (!zapisano) {
+    throw new Error('Odrzucono zapis tokenów: istnieje nowsza autoryzacja właściciela.');
+  }
 }
 async function pobierzTokenyWlasciciela(env) {
   const magazyn = magazynBlokadOdświeżania(env);
@@ -459,7 +462,11 @@ async function handleCallback(request, env) {
     return text('Brak kodu OAuth lub nieprawidłowy parametr state.', 400);
   }
   const rezerwacja = await zarezerwujTokenOAuth(env, state);
-  if (!rezerwacja || !rezerwacja.dane || Date.now() - rezerwacja.dane.created_at > TOKEN_TTL_MS) {
+  if (!rezerwacja || !rezerwacja.dane
+    || !Number.isSafeInteger(rezerwacja.dane.created_at)
+    || rezerwacja.dane.created_at <= 0
+    || rezerwacja.dane.created_at > Date.now() + 30_000
+    || Date.now() - rezerwacja.dane.created_at > TOKEN_TTL_MS) {
     return text('Link wygasł, jest nieprawidłowy lub autoryzacja jest już przetwarzana. Spróbuj ponownie za chwilę.', 400);
   }
   const pending = rezerwacja.dane;
@@ -542,7 +549,7 @@ async function handleCallback(request, env) {
       return text('Autoryzowane konto Kick nie jest wcześniej skonfigurowanym kanałem. Zmiana kanału wymaga osobnej procedury.', 403);
     }
     // Nie zapisujemy tokenów ani konfiguracji, dopóki tożsamość kanału nie przejdzie kontroli.
-    await saveTokens(env, tokens);
+    await saveTokens(env, tokens, { issuedAt: pending.created_at });
     await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
     await env.SUBS_KV.put('config:broadcaster_username', owner.username);
     const repo = repozytorium(env);
