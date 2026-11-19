@@ -215,6 +215,7 @@ function utworzSrodowisko({ bladCheckpoint = false, bladFinalizacji = false, bla
         assert.equal(nazwa, 'refresh-owner');
         return {
           async pobierzTokeny() { return tokenyWlasciciela; },
+          async nowaGeneracjaOAuth() { return 1; },
           async zainicjujTokeny(dane) {
             if (!tokenyWlasciciela) tokenyWlasciciela = { ...dane };
             return { ...tokenyWlasciciela };
