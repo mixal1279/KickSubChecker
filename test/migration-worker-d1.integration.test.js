@@ -219,6 +219,7 @@ test('pełny handler migracji używa KV fixture i rzeczywistej testowej D1', { s
         assert.equal(nazwa, 'refresh-owner');
         return {
           async pobierzTokeny() { return tokenyWlasciciela; },
+          async nowaGeneracjaOAuth() { return 1; },
           async zainicjujTokeny(dane) {
             if (!tokenyWlasciciela) tokenyWlasciciela = { ...dane };
             return { ...tokenyWlasciciela };
