@@ -7,6 +7,7 @@ function utworzMagazyn() {
   const dane = new Map();
   const blokady = new Map();
   let tokenyWlasciciela = null;
+  let generacjaOAuth = null;
   let stanCutoveru = null;
   let stanGlobalnyCutoveru = null;
   let tabelaTokenowUtworzona = false;
@@ -17,6 +18,17 @@ function utworzMagazyn() {
       if (q.startsWith('CREATE TABLE') || q.startsWith('CREATE INDEX')) {
         if (q.includes('OAUTH_CREDENTIALS')) tabelaTokenowUtworzona = true;
         return { toArray: () => [] };
+      }
+      if (q.startsWith('INSERT INTO OAUTH_GENERATION')) {
+        if (q.includes('VALUES (1, 0)')) {
+          generacjaOAuth ??= 0;
+          return { toArray: () => [] };
+        }
+        generacjaOAuth = (generacjaOAuth ?? 0) + 1;
+        return { toArray: () => [{ generation: generacjaOAuth }] };
+      }
+      if (q.startsWith('SELECT GENERATION FROM OAUTH_GENERATION')) {
+        return { toArray: () => generacjaOAuth == null ? [] : [{ generation: generacjaOAuth }] };
       }
       if (q.startsWith('SELECT BROADCASTER_ID, BACKEND FROM CUTOVER_REGISTRY')) {
         return { toArray: () => stanGlobalnyCutoveru ? [{ ...stanGlobalnyCutoveru }] : [] };
@@ -128,6 +140,7 @@ function utworzMagazyn() {
         const kopia = structuredClone([...dane.entries()]);
         const kopiaBlokad = structuredClone([...blokady.entries()]);
         const kopiaTokenow = structuredClone(tokenyWlasciciela);
+        const kopiaGeneracjiOAuth = generacjaOAuth;
         const kopiaCutoveru = structuredClone(stanCutoveru);
         const kopiaGlobalnegoCutoveru = structuredClone(stanGlobalnyCutoveru);
         try { return fn(); } catch (error) {
@@ -136,6 +149,7 @@ function utworzMagazyn() {
           blokady.clear();
           for (const [klucz, wartosc] of kopiaBlokad) blokady.set(klucz, wartosc);
           tokenyWlasciciela = kopiaTokenow;
+          generacjaOAuth = kopiaGeneracjiOAuth;
           stanCutoveru = kopiaCutoveru;
           stanGlobalnyCutoveru = kopiaGlobalnegoCutoveru;
           throw error;
