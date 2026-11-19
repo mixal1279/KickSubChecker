@@ -15,37 +15,67 @@ Baza `kick-sub-checker-test` pozostaje osobnym zasobem używanym przez testy int
 
 ## Wymagane działania operatora
 
-Do samego smoke testu Durable Objects kroki dotyczące Kick (broadcaster ID i OAuth) nie są potrzebne. Placeholdery `KICK_BROADCASTER_ID` i `REDIRECT_URI` mogą pozostać bez zmian, ponieważ stagingowy endpoint testowy jest obsługiwany przed routingiem aplikacji. Te wartości są wymagane dopiero do testów OAuth, webhooków i migracji D1.
+Worker `kick-auth-staging` został już wysłany przez Cloudflare API. Cloudflare utworzył osobny SQLite Durable Object namespace. Workers.dev pozostaje wyłączony do czasu ustawienia sekretu administratora. Worker ma wyłącznie stagingowe bindingi:
 
-1. Do późniejszych testów integracji Kick wybierz dedykowane konto/kanał testowy i odczytaj jego rzeczywisty broadcaster ID. Wpisz go do `KICK_BROADCASTER_ID` w `wrangler.staging.toml`. Nie używaj ID produkcyjnego kanału.
-2. Do późniejszych testów OAuth utwórz osobną aplikację Kick dla staging. Ustaw redirect URI zgodny z rzeczywistą domeną workers.dev staging i zarejestruj dokładnie ten sam URI w panelu Kick. `REDIRECT_URI` jest już ustawiony na zweryfikowany stagingowy adres workers.dev. Zarejestruj ten dokładny adres w panelu Kick.
-3. Przed wdrożeniem zweryfikuj plik konfiguracyjny:
+- KV: `KICK_SUB_CHECKER_STAGING`
+- D1: `kick-sub-checker-staging` (`D1_ENABLED=false`)
+- DO: osobny namespace `OAuthTokenStore`
+- `MIGRATION_WRITE_FREEZE=true`
+- brak sekretów produkcyjnych
 
-   ```bash
-   npx wrangler deploy --dry-run --config wrangler.staging.toml
-   ```
+Do samego smoke testu DO nie jest potrzebny `KICK_BROADCASTER_ID`, aplikacja Kick ani migracje D1. Placeholder `SET_BY_OPERATOR` może pozostać. `REDIRECT_URI` jest już ustawiony na zweryfikowany adres:
 
-4. Zastosuj migracje wyłącznie do staging D1:
+`https://kick-auth-staging.michalkowalczyk489.workers.dev/callback`
 
-   ```bash
-   npx wrangler d1 migrations apply kick-sub-checker-staging --remote --config wrangler.staging.toml
-   ```
-
-5. Wykonaj pierwsze wdrożenie wyłącznie przez osobny plik:
-
-   ```bash
-   npx wrangler deploy --config wrangler.staging.toml
-   ```
-
-   Nie używaj `wrangler.toml`, `--env production`, `wrangler deploy` bez jawnego `--config` ani komend z produkcyjnym skryptem.
-
-6. Po pierwszym wdrożeniu ustaw nowy sekret administratora staging:
+1. Ustaw nowy, losowy i unikalny sekret administratora staging:
 
    ```bash
    npx wrangler secret put ADMIN_API_SECRET --config wrangler.staging.toml
    ```
 
-   Sekret musi być unikalny i nie może być równy żadnemu sekretowi produkcyjnemu. Do późniejszych testów OAuth ustaw dodatkowo osobne stagingowe sekrety:
+   Nie używaj sekretu produkcyjnego. Sekret nie może być równy `BOT_API_SECRET`.
+
+2. Wykonaj dry-run konfiguracji, a następnie włącz stagingowy Worker na workers.dev:
+
+   ```bash
+   npx wrangler deploy --dry-run --config wrangler.staging.toml
+   npx wrangler deploy --config wrangler.staging.toml
+   ```
+
+   Obie komendy muszą jawnie wskazywać `wrangler.staging.toml`. Nie używaj `wrangler.toml`, `--env production` ani komend wdrażających produkcyjny Worker. Migracja DO `v1` jest już utworzona dla staging; nie zmieniaj jej tagu.
+
+3. Uruchom testy rzeczywistego staging namespace DO. Endpoint wymaga `STAGING_DO_TESTS=true` oraz `ADMIN_API_SECRET` i nie istnieje w produkcyjnym entrypoincie:
+
+   ```bash
+   curl -X POST 'https://kick-auth-staging.michalkowalczyk489.workers.dev/__staging/do-smoke-test' \
+     -H "Authorization: Bearer $ADMIN_API_SECRET" \
+     -H 'Content-Type: application/json' \
+     -d '{"phase":"exercise"}'
+   ```
+
+   Test wykonuje na rzeczywistych DO: zapis/odczyt SQLite, wyłączność równoległych lease, równoległy CAS refresh tokena i odrzucenie zapisu przez starego właściciela po wygaśnięciu lease.
+
+4. Trwałość pomiędzy osobnymi żądaniami sprawdź dwoma wywołaniami z tym samym losowym `test_id` (32 małe znaki hex):
+
+   ```bash
+   curl -X POST 'https://kick-auth-staging.michalkowalczyk489.workers.dev/__staging/do-smoke-test' \
+     -H "Authorization: Bearer $ADMIN_API_SECRET" -H 'Content-Type: application/json' \
+     -d '{"phase":"write","test_id":"0123456789abcdef0123456789abcdef"}'
+
+   curl -X POST 'https://kick-auth-staging.michalkowalczyk489.workers.dev/__staging/do-smoke-test' \
+     -H "Authorization: Bearer $ADMIN_API_SECRET" -H 'Content-Type: application/json' \
+     -d '{"phase":"read","test_id":"0123456789abcdef0123456789abcdef"}'
+   ```
+
+   Drugi request musi zwrócić `persisted: true`. To potwierdza trwałość między requestami, ale nie wymusza fizycznej evikcji obiektu.
+
+5. Dopiero przed testami D1 wykonaj migracje wyłącznie na staging D1:
+
+   ```bash
+   npx wrangler d1 migrations apply kick-sub-checker-staging --remote --config wrangler.staging.toml
+   ```
+
+6. Przed testami OAuth/webhooków utwórz osobną aplikację Kick dla staging, zarejestruj dokładny `REDIRECT_URI`, ustaw rzeczywisty broadcaster ID testowego kanału i osobne sekrety:
 
    ```bash
    npx wrangler secret put KICK_CLIENT_ID --config wrangler.staging.toml
@@ -53,32 +83,7 @@ Do samego smoke testu Durable Objects kroki dotyczące Kick (broadcaster ID i OA
    npx wrangler secret put BOT_API_SECRET --config wrangler.staging.toml
    ```
 
-   `ADMIN_API_SECRET` musi być różny od `BOT_API_SECRET`. Sekrety Kick nie są potrzebne do smoke testu DO.
-
-7. Uruchom testy rzeczywistego staging namespace DO. Endpoint jest dostępny wyłącznie w staging entrypoincie, wymaga `STAGING_DO_TESTS=true` oraz `ADMIN_API_SECRET` i nie jest częścią produkcyjnego entrypointu:
-
-   ```bash
-   curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \
-     -H "Authorization: Bearer $ADMIN_API_SECRET" \
-     -H 'Content-Type: application/json' \
-     -d '{"phase":"exercise"}'
-   ```
-
-   Test wykonuje na rzeczywistych DO: jednorazowy zapis/odczyt SQLite, wyłączność równoległych lease, równoległy CAS refresh tokena i odrzucenie zapisu przez starego właściciela po wygaśnięciu lease.
-
-   Trwałość między osobnymi żądaniami sprawdź w dwóch wywołaniach z tym samym losowym `test_id` (32 małe znaki hex):
-
-   ```bash
-   curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \
-     -H "Authorization: Bearer $ADMIN_API_SECRET" -H 'Content-Type: application/json' \
-     -d '{"phase":"write","test_id":"0123456789abcdef0123456789abcdef"}'
-
-   curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \
-     -H "Authorization: Bearer $ADMIN_API_SECRET" -H 'Content-Type: application/json' \
-     -d '{"phase":"read","test_id":"0123456789abcdef0123456789abcdef"}'
-   ```
-
-   Drugi request musi zwrócić `persisted: true`. To potwierdza trwałość między requestami, ale nie wymusza evikcji obiektu.
+   Nie używaj produkcyjnego konta, kanału ani sekretów.
 
 ## Kolejność testu migracji staging
 
