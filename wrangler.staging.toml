@@ -1,11 +1,12 @@
 name = "kick-auth-staging"
-main = "index.js"
+main = "staging-runtime-test.js"
 compatibility_date = "2026-10-01"
 workers_dev = true
 
 # Osobny Worker staging. Nie dziedziczy bindingów z wrangler.toml.
 [vars]
 REDIRECT_URI = "https://kick-auth-staging.REPLACE_WITH_WORKERS_DEV_SUBDOMAIN.workers.dev/callback"
+STAGING_DO_TESTS = "true"
 D1_ENABLED = "false"
 KICK_BROADCASTER_ID = "SET_BY_OPERATOR"
 MIGRATION_WRITE_FREEZE = "true"
