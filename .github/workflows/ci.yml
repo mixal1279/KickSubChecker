@@ -40,6 +40,10 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           D1_TEST_DATABASE_ID: ${{ secrets.D1_TEST_DATABASE_ID }}
         run: npm test
+      - name: Zainstaluj narzędzia testowe Durable Objects
+        run: npm install --no-package-lock --no-audit --no-fund
+      - name: Testuj Durable Objects w runtime workerd
+        run: npm run test:do
 
   node18-compat:
     name: Node 18.17 compatibility
