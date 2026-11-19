@@ -75,6 +75,55 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
     expect(await stub.zarezerwuj(token, "oauth-state", 30_000)).toBeNull();
   });
 
+  it("inicjalizuje tokeny właściciela bez nadpisywania istniejących poświadczeń", async () => {
+    const stub = utworzStub("owner-init");
+    const pierwsze = {
+      access_token: "access-pierwszy",
+      refresh_token: "refresh-pierwszy",
+      expires_at: Date.now() + 60_000,
+    };
+    const drugie = {
+      access_token: "access-drugi",
+      refresh_token: "refresh-drugi",
+      expires_at: Date.now() + 120_000,
+    };
+
+    await expect(stub.zainicjujTokeny(pierwsze)).resolves.toEqual(pierwsze);
+    await expect(stub.zainicjujTokeny(drugie)).resolves.toEqual(pierwsze);
+    await expect(stub.pobierzTokeny()).resolves.toEqual(pierwsze);
+  });
+
+  it("rotuje token właściciela tylko z aktywną blokadą i zgodnym refresh tokenem", async () => {
+    const stub = utworzStub("owner-refresh");
+    const obecne = {
+      access_token: "access-stary",
+      refresh_token: "refresh-stary",
+      expires_at: Date.now() + 60_000,
+    };
+    const nowe = {
+      access_token: "access-nowy",
+      refresh_token: "refresh-nowy",
+      expires_at: Date.now() + 120_000,
+    };
+
+    await stub.zainicjujTokeny(obecne);
+    await expect(
+      stub.zapiszOdswiezoneTokeny(nowe, "nieistniejaca-blokada", obecne.refresh_token),
+    ).resolves.toBe(false);
+
+    const blokada = await stub.zarezerwujBlokade("broadcaster", 30_000);
+    expect(blokada).toEqual(expect.any(String));
+    await expect(
+      stub.zapiszOdswiezoneTokeny(nowe, blokada, "nieaktualny-refresh"),
+    ).resolves.toBe(false);
+    await expect(stub.pobierzTokeny()).resolves.toEqual(obecne);
+
+    await expect(
+      stub.zapiszOdswiezoneTokeny(nowe, blokada, obecne.refresh_token),
+    ).resolves.toBe(true);
+    await expect(stub.pobierzTokeny()).resolves.toEqual(nowe);
+  });
+
   it("niezmiennie wiąże rejestr instalacji z jednym kanałem", async () => {
     const stub = utworzStub("registry");
 
