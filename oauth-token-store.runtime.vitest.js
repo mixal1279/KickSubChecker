@@ -184,6 +184,55 @@ describe("OAuthTokenStore — runtime workerd i SQLite", () => {
   });
 
 
+  it("odrzuca spóźniony callback OAuth, który próbuje nadpisać nowszą autoryzację", async () => {
+    const stub = utworzStub("oauth-callback-order");
+    const nowsze = {
+      access_token: "access-nowszy",
+      refresh_token: "refresh-nowszy",
+      expires_at: Date.now() + 180_000,
+    };
+    const starsze = {
+      access_token: "access-starszy",
+      refresh_token: "refresh-starszy",
+      expires_at: Date.now() + 120_000,
+    };
+
+    await expect(stub.zapiszTokeny(nowsze, 2_000)).resolves.toBe(true);
+    await expect(stub.zapiszTokeny(starsze, 1_000)).resolves.toBe(false);
+    await expect(stub.pobierzTokeny()).resolves.toEqual(nowsze);
+  });
+
+  it("rotacja refresh tokena blokuje callback OAuth rozpoczęty wcześniej", async () => {
+    const stub = utworzStub("oauth-callback-after-refresh");
+    const obecne = {
+      access_token: "access-przed",
+      refresh_token: "refresh-przed",
+      expires_at: Date.now() + 120_000,
+    };
+    const odswiezone = {
+      access_token: "access-po",
+      refresh_token: "refresh-po",
+      expires_at: Date.now() + 180_000,
+    };
+    const rozpoczecieStarszegoOAuth = Date.now() - 1_000;
+
+    await stub.zainicjujTokeny(obecne);
+    const lease = await stub.zarezerwujBlokade("broadcaster", 30_000);
+    expect(lease).toEqual(expect.any(String));
+    await expect(
+      stub.zapiszOdswiezoneTokeny(odswiezone, lease, obecne.refresh_token),
+    ).resolves.toBe(true);
+    await expect(
+      stub.zapiszTokeny({
+        access_token: "access-z-opoznionego-callbacku",
+        refresh_token: "refresh-z-opoznionego-callbacku",
+        expires_at: Date.now() + 120_000,
+      }, rozpoczecieStarszegoOAuth),
+    ).resolves.toBe(false);
+    await expect(stub.pobierzTokeny()).resolves.toEqual(odswiezone);
+    await stub.zwolnijBlokade("broadcaster", lease);
+  });
+
   it("po utracie lease odrzuca zapis starego właściciela", async () => {
     const stub = utworzStub("expired-lease");
     const obecne = {
