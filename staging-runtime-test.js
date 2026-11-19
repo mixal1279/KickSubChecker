@@ -60,7 +60,8 @@ async function wykonajTestyDO(env) {
       expires_at: Date.now() + 120_000,
     };
     const refreshStore = wymagajMagazynu(env, "staging-refresh-smoke");
-    await refreshStore.zapiszTokeny(obecne);
+    const generacjaRefresh = await refreshStore.nowaGeneracjaOAuth();
+    await refreshStore.zapiszTokeny(obecne, generacjaRefresh);
     const lease = await refreshStore.zarezerwujBlokade("broadcaster", 30_000);
     if (!lease) throw new Error("Nie udało się uzyskać lease rotacji.");
     const kandydaci = Array.from({ length: 16 }, (_, i) => ({
@@ -78,7 +79,8 @@ async function wykonajTestyDO(env) {
     await refreshStore.zwolnijBlokade("broadcaster", lease);
 
     const expiryStore = wymagajMagazynu(env, "staging-expiry-smoke");
-    await expiryStore.zapiszTokeny(obecne);
+    const generacjaExpiry = await expiryStore.nowaGeneracjaOAuth();
+    await expiryStore.zapiszTokeny(obecne, generacjaExpiry);
     const staryLease = await expiryStore.zarezerwujBlokade("broadcaster", 1_000);
     if (!staryLease) throw new Error("Nie udało się uzyskać testowego lease.");
     await new Promise((resolve) => setTimeout(resolve, 1_100));
