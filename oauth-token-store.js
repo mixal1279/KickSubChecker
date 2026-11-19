@@ -24,14 +24,15 @@ export class OAuthTokenStore extends DurableObject {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         access_token TEXT NOT NULL,
         refresh_token TEXT NOT NULL,
-        expires_at INTEGER NOT NULL,
-        issued_at INTEGER NOT NULL DEFAULT 0
+        expires_at INTEGER NOT NULL
       )
     `);
-    const kolumnyTokenow = this.sql.exec('PRAGMA table_info(oauth_credentials)').toArray();
-    if (!kolumnyTokenow.some((kolumna) => kolumna.name === 'issued_at')) {
-      this.sql.exec('ALTER TABLE oauth_credentials ADD COLUMN issued_at INTEGER NOT NULL DEFAULT 0');
-    }
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_generation (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        generation INTEGER NOT NULL
+      )
+    `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS cutover_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -84,25 +85,41 @@ export class OAuthTokenStore extends DurableObject {
     });
   }
 
-  async zapiszTokeny(dane, rozpoczecieAt = Date.now()) {
+  async nowaGeneracjaOAuth() {
+    return this.ctx.storage.transactionSync(() => {
+      const wpis = this.sql.exec(
+        `INSERT INTO oauth_generation (id, generation)
+         VALUES (1, 1)
+         ON CONFLICT(id) DO UPDATE SET generation = oauth_generation.generation + 1
+         RETURNING generation`,
+      ).toArray()[0];
+      if (!Number.isSafeInteger(wpis?.generation) || wpis.generation < 1) {
+        throw new Error('Nie udało się przydzielić generacji OAuth.');
+      }
+      return wpis.generation;
+    });
+  }
+
+  async zapiszTokeny(dane, generacja) {
     this.#sprawdzDaneTokenow(dane);
-    if (!Number.isSafeInteger(rozpoczecieAt) || rozpoczecieAt < 0) {
-      throw new TypeError('Nieprawidłowy czas rozpoczęcia autoryzacji OAuth.');
+    if (!Number.isSafeInteger(generacja) || generacja < 1) {
+      throw new TypeError('Nieprawidłowa generacja autoryzacji OAuth.');
     }
     return this.ctx.storage.transactionSync(() => {
-      const wynik = this.sql.exec(
-        `INSERT INTO oauth_credentials (id, access_token, refresh_token, expires_at, issued_at)
-         VALUES (1, ?, ?, ?, ?)
+      const aktualna = this.sql.exec(
+        'SELECT generation FROM oauth_generation WHERE id = 1',
+      ).toArray()[0];
+      if (Number(aktualna?.generation) !== generacja) return false;
+      this.sql.exec(
+        `INSERT INTO oauth_credentials (id, access_token, refresh_token, expires_at)
+         VALUES (1, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            access_token = excluded.access_token,
            refresh_token = excluded.refresh_token,
-           expires_at = excluded.expires_at,
-           issued_at = excluded.issued_at
-         WHERE oauth_credentials.issued_at < excluded.issued_at
-         RETURNING id`,
-        dane.access_token, dane.refresh_token, dane.expires_at, rozpoczecieAt,
-      ).toArray();
-      return wynik.length === 1;
+           expires_at = excluded.expires_at`,
+        dane.access_token, dane.refresh_token, dane.expires_at,
+      );
+      return true;
     });
   }
 
@@ -118,13 +135,18 @@ export class OAuthTokenStore extends DurableObject {
       if (!blokada) return false;
       const wynik = this.sql.exec(
         `UPDATE oauth_credentials
-         SET access_token = ?, refresh_token = ?, expires_at = ?,
-             issued_at = MAX(issued_at + 1, ?)
+         SET access_token = ?, refresh_token = ?, expires_at = ?
          WHERE id = 1 AND refresh_token = ?
          RETURNING id`,
-        dane.access_token, dane.refresh_token, dane.expires_at, Date.now(), poprzedniRefreshToken,
+        dane.access_token, dane.refresh_token, dane.expires_at, poprzedniRefreshToken,
       ).toArray();
-      return wynik.length === 1;
+      if (wynik.length !== 1) return false;
+      this.sql.exec(
+        `INSERT INTO oauth_generation (id, generation)
+         VALUES (1, 1)
+         ON CONFLICT(id) DO UPDATE SET generation = oauth_generation.generation + 1`,
+      );
+      return true;
     });
   }
 
