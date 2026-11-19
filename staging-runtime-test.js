@@ -102,6 +102,38 @@ async function wykonajTestyDO(env) {
   };
 }
 
+async function odczytajBodyZLimitem(request, limit) {
+  const naglowek = Number(request.headers.get("Content-Length") || 0);
+  if (Number.isFinite(naglowek) && naglowek > limit) return null;
+  if (!request.body) return "";
+
+  const czytnik = request.body.getReader();
+  const fragmenty = [];
+  let rozmiar = 0;
+  try {
+    while (true) {
+      const { done, value } = await czytnik.read();
+      if (done) break;
+      rozmiar += value.byteLength;
+      if (rozmiar > limit) {
+        await czytnik.cancel();
+        return null;
+      }
+      fragmenty.push(value);
+    }
+  } finally {
+    czytnik.releaseLock();
+  }
+
+  const dane = new Uint8Array(rozmiar);
+  let offset = 0;
+  for (const fragment of fragmenty) {
+    dane.set(fragment, offset);
+    offset += fragment.byteLength;
+  }
+  return new TextDecoder("utf-8", { fatal: true }).decode(dane);
+}
+
 async function obsluzTestStagingDO(request, env) {
   if (env.STAGING_DO_TESTS !== "true") return json({ error: "not_found" }, 404);
   if (request.method !== "POST") return json({ error: "method_not_allowed" }, 405);
@@ -109,8 +141,8 @@ async function obsluzTestStagingDO(request, env) {
 
   let body;
   try {
-    const raw = await request.text();
-    if (raw.length > 1_024) return json({ error: "payload_too_large" }, 413);
+    const raw = await odczytajBodyZLimitem(request, 1_024);
+    if (raw === null) return json({ error: "payload_too_large" }, 413);
     body = raw ? JSON.parse(raw) : {};
   } catch {
     return json({ error: "invalid_json" }, 400);
