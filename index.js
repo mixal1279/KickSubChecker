@@ -307,7 +307,7 @@ function magazynBlokadOdświeżania(env) {
   }
   const magazyn = env.OAUTH_TOKENS.getByName('refresh-owner');
   const wymagane = [
-    'pobierzTokeny', 'zainicjujTokeny', 'zapiszTokeny',
+    'pobierzTokeny', 'zainicjujTokeny', 'zapiszTokeny', 'nowaGeneracjaOAuth',
     'zapiszOdswiezoneTokeny', 'zarezerwujBlokade', 'zwolnijBlokade',
   ];
   if (wymagane.some((metoda) => typeof magazyn[metoda] !== 'function')) {
@@ -340,7 +340,10 @@ async function saveTokens(env, tokens, opcje = {}) {
     if (!zapisano) throw new Error('Odrzucono zapis tokenów: blokada wygasła lub refresh token został już zmieniony.');
     return;
   }
-  const zapisano = await magazyn.zapiszTokeny(dane, opcje.issuedAt ?? Date.now());
+  if (!Number.isSafeInteger(opcje.generacja) || opcje.generacja < 1) {
+    throw new Error('Brak poprawnej generacji autoryzacji właściciela.');
+  }
+  const zapisano = await magazyn.zapiszTokeny(dane, opcje.generacja);
   if (!zapisano) {
     throw new Error('Odrzucono zapis tokenów: istnieje nowsza autoryzacja właściciela.');
   }
@@ -466,7 +469,9 @@ async function handleCallback(request, env) {
     || !Number.isSafeInteger(rezerwacja.dane.created_at)
     || rezerwacja.dane.created_at <= 0
     || rezerwacja.dane.created_at > Date.now() + 30_000
-    || Date.now() - rezerwacja.dane.created_at > TOKEN_TTL_MS) {
+    || Date.now() - rezerwacja.dane.created_at > TOKEN_TTL_MS
+    || (rezerwacja.dane.owner === true
+      && (!Number.isSafeInteger(rezerwacja.dane.generacja) || rezerwacja.dane.generacja < 1))) {
     return text('Link wygasł, jest nieprawidłowy lub autoryzacja jest już przetwarzana. Spróbuj ponownie za chwilę.', 400);
   }
   const pending = rezerwacja.dane;
@@ -549,7 +554,7 @@ async function handleCallback(request, env) {
       return text('Autoryzowane konto Kick nie jest wcześniej skonfigurowanym kanałem. Zmiana kanału wymaga osobnej procedury.', 403);
     }
     // Nie zapisujemy tokenów ani konfiguracji, dopóki tożsamość kanału nie przejdzie kontroli.
-    await saveTokens(env, tokens, { issuedAt: pending.created_at });
+    await saveTokens(env, tokens, { generacja: pending.generacja });
     await env.SUBS_KV.put('config:broadcaster_id', owner.user_id);
     await env.SUBS_KV.put('config:broadcaster_username', owner.username);
     const repo = repozytorium(env);
