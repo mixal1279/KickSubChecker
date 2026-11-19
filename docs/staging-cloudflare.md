@@ -15,7 +15,7 @@ Baza `kick-sub-checker-test` pozostaje osobnym zasobem używanym przez testy int
 
 ## Wymagane działania operatora
 
-Do samego smoke testu Durable Objects kroki dotyczące Kick (broadcaster ID i OAuth) nie są potrzebne. Placeholdery `KICK_BROADCASTER_ID` i `REDIRECT_URI` mogą pozostać bez zmian, ponieważ stagingowy endpoint testowy jest obsługiwany przed routingiem aplikacji. Te dwie wartości są wymagane dopiero do testów OAuth, webhooków i migracji D1.
+Do samego smoke testu Durable Objects kroki dotyczące Kick (broadcaster ID i OAuth) nie są potrzebne. Placeholdery `KICK_BROADCASTER_ID` i `REDIRECT_URI` mogą pozostać bez zmian, ponieważ stagingowy endpoint testowy jest obsługiwany przed routingiem aplikacji. Te wartości są wymagane dopiero do testów OAuth, webhooków i migracji D1.
 
 1. Do późniejszych testów integracji Kick wybierz dedykowane konto/kanał testowy i odczytaj jego rzeczywisty broadcaster ID. Wpisz go do `KICK_BROADCASTER_ID` w `wrangler.staging.toml`. Nie używaj ID produkcyjnego kanału.
 2. Do późniejszych testów OAuth utwórz osobną aplikację Kick dla staging. Ustaw redirect URI zgodny z rzeczywistą domeną workers.dev staging i zarejestruj dokładnie ten sam URI w panelu Kick. Zastąp placeholder `REDIRECT_URI`.
@@ -28,16 +28,10 @@ Do samego smoke testu Durable Objects kroki dotyczące Kick (broadcaster ID i OA
 4. Zastosuj migracje wyłącznie do staging D1:
 
    ```bash
-   npx wrangler deploy --dry-run --config wrangler.staging.toml
-   ```
-
-5. Zastosuj migracje wyłącznie do staging D1:
-
-   ```bash
    npx wrangler d1 migrations apply kick-sub-checker-staging --remote --config wrangler.staging.toml
    ```
 
-6. Wykonaj pierwsze wdrożenie wyłącznie przez osobny plik:
+5. Wykonaj pierwsze wdrożenie wyłącznie przez osobny plik:
 
    ```bash
    npx wrangler deploy --config wrangler.staging.toml
@@ -45,7 +39,23 @@ Do samego smoke testu Durable Objects kroki dotyczące Kick (broadcaster ID i OA
 
    Nie używaj `wrangler.toml`, `--env production`, `wrangler deploy` bez jawnego `--config` ani komend z produkcyjnym skryptem.
 
-7. Po wdrożeniu uruchom testy rzeczywistego staging namespace DO. Endpoint jest dostępny wyłącznie w staging entrypoincie, wymaga `STAGING_DO_TESTS=true` oraz `ADMIN_API_SECRET` i nie jest częścią produkcyjnego entrypointu:
+6. Po pierwszym wdrożeniu ustaw nowy sekret administratora staging:
+
+   ```bash
+   npx wrangler secret put ADMIN_API_SECRET --config wrangler.staging.toml
+   ```
+
+   Sekret musi być unikalny i nie może być równy żadnemu sekretowi produkcyjnemu. Do późniejszych testów OAuth ustaw dodatkowo osobne stagingowe sekrety:
+
+   ```bash
+   npx wrangler secret put KICK_CLIENT_ID --config wrangler.staging.toml
+   npx wrangler secret put KICK_CLIENT_SECRET --config wrangler.staging.toml
+   npx wrangler secret put BOT_API_SECRET --config wrangler.staging.toml
+   ```
+
+   `ADMIN_API_SECRET` musi być różny od `BOT_API_SECRET`. Sekrety Kick nie są potrzebne do smoke testu DO.
+
+7. Uruchom testy rzeczywistego staging namespace DO. Endpoint jest dostępny wyłącznie w staging entrypoincie, wymaga `STAGING_DO_TESTS=true` oraz `ADMIN_API_SECRET` i nie jest częścią produkcyjnego entrypointu:
 
    ```bash
    curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \
