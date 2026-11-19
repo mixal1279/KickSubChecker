@@ -48,9 +48,9 @@ Baza `kick-sub-checker-test` pozostaje osobnym zasobem używanym przez testy int
 7. Po wdrożeniu uruchom testy rzeczywistego staging namespace DO. Endpoint jest dostępny wyłącznie w staging entrypoincie, wymaga `STAGING_DO_TESTS=true` oraz `ADMIN_API_SECRET` i nie jest częścią produkcyjnego entrypointu:
 
    ```bash
-   curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \\
-     -H "Authorization: Bearer $ADMIN_API_SECRET" \\
-     -H 'Content-Type: application/json' \\
+   curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \
+     -H "Authorization: Bearer $ADMIN_API_SECRET" \
+     -H 'Content-Type: application/json' \
      -d '{"phase":"exercise"}'
    ```
 
@@ -59,12 +59,12 @@ Baza `kick-sub-checker-test` pozostaje osobnym zasobem używanym przez testy int
    Trwałość między osobnymi żądaniami sprawdź w dwóch wywołaniach z tym samym losowym `test_id` (32 małe znaki hex):
 
    ```bash
-   curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \\
-     -H "Authorization: Bearer $ADMIN_API_SECRET" -H 'Content-Type: application/json' \\
+   curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \
+     -H "Authorization: Bearer $ADMIN_API_SECRET" -H 'Content-Type: application/json' \
      -d '{"phase":"write","test_id":"0123456789abcdef0123456789abcdef"}'
 
-   curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \\
-     -H "Authorization: Bearer $ADMIN_API_SECRET" -H 'Content-Type: application/json' \\
+   curl -X POST 'https://kick-auth-staging.TWOJ_SUBDOMAIN.workers.dev/__staging/do-smoke-test' \
+     -H "Authorization: Bearer $ADMIN_API_SECRET" -H 'Content-Type: application/json' \
      -d '{"phase":"read","test_id":"0123456789abcdef0123456789abcdef"}'
    ```
 
