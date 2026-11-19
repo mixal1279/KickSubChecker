@@ -12,6 +12,7 @@ function utworzEnv({ freeze = 'false', awariaZapisu = false } = {}) {
   const zdarzenia = [];
   let tokeny = null;
   let licznik = 0;
+  let generacjaOAuth = 0;
   const magazyn = {
     async zapisz(token, typ, dane, wygasaAt) {
       if (wpisy.has(token)) throw new Error('duplicate token');
@@ -47,9 +48,10 @@ function utworzEnv({ freeze = 'false', awariaZapisu = false } = {}) {
     },
     async pobierzTokeny() { return tokeny; },
     async zainicjujTokeny(dane) { tokeny ??= dane; return tokeny; },
-    async nowaGeneracjaOAuth() { return 1; },
-    async zapiszTokeny(dane) {
+    async nowaGeneracjaOAuth() { generacjaOAuth += 1; return generacjaOAuth; },
+    async zapiszTokeny(dane, generacja) {
       if (awariaZapisu) throw new Error('durable object unavailable');
+      if (generacja !== generacjaOAuth) return false;
       tokeny = dane;
       zdarzenia.push({ operacja: 'zapisz-tokeny' });
       return true;
