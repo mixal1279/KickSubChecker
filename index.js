@@ -556,6 +556,9 @@ async function handleCallback(request, env) {
     if (repo) await repo.zapiszKanal({ broadcasterId: owner.user_id, username: owner.username });
   } catch (error) {
     console.error('Zapis autoryzacji właściciela:', error.message);
+    if (error.message === 'Odrzucono zapis tokenów: istnieje nowsza autoryzacja właściciela.') {
+      return text('Odrzucono spóźniony callback OAuth. Nowsze tokeny właściciela pozostają bez zmian.', 409);
+    }
     return text('Kick autoryzował aplikację, ale zapis konfiguracji kanału się nie powiódł. Tokeny pozostają w Durable Object; ponów próbę konfiguracji bez ponownego OAuth.', 500);
   }
   return text('Autoryzacja właściciela kanału zakończona. Tokeny są zapisane w Durable Object. Administrator może teraz zarejestrować webhooki.');
