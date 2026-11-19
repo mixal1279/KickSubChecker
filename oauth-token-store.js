@@ -24,9 +24,14 @@ export class OAuthTokenStore extends DurableObject {
         id INTEGER PRIMARY KEY CHECK (id = 1),
         access_token TEXT NOT NULL,
         refresh_token TEXT NOT NULL,
-        expires_at INTEGER NOT NULL
+        expires_at INTEGER NOT NULL,
+        issued_at INTEGER NOT NULL DEFAULT 0
       )
     `);
+    const kolumnyTokenow = this.sql.exec('PRAGMA table_info(oauth_credentials)').toArray();
+    if (!kolumnyTokenow.some((kolumna) => kolumna.name === 'issued_at')) {
+      this.sql.exec('ALTER TABLE oauth_credentials ADD COLUMN issued_at INTEGER NOT NULL DEFAULT 0');
+    }
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS cutover_state (
         id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -79,20 +84,26 @@ export class OAuthTokenStore extends DurableObject {
     });
   }
 
-  async zapiszTokeny(dane) {
+  async zapiszTokeny(dane, rozpoczecieAt = Date.now()) {
     this.#sprawdzDaneTokenow(dane);
-    this.ctx.storage.transactionSync(() => {
-      this.sql.exec(
-        `INSERT INTO oauth_credentials (id, access_token, refresh_token, expires_at)
-         VALUES (1, ?, ?, ?)
+    if (!Number.isSafeInteger(rozpoczecieAt) || rozpoczecieAt < 0) {
+      throw new TypeError('Nieprawidłowy czas rozpoczęcia autoryzacji OAuth.');
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const wynik = this.sql.exec(
+        `INSERT INTO oauth_credentials (id, access_token, refresh_token, expires_at, issued_at)
+         VALUES (1, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            access_token = excluded.access_token,
            refresh_token = excluded.refresh_token,
-           expires_at = excluded.expires_at`,
-        dane.access_token, dane.refresh_token, dane.expires_at,
-      );
+           expires_at = excluded.expires_at,
+           issued_at = excluded.issued_at
+         WHERE oauth_credentials.issued_at < excluded.issued_at
+         RETURNING id`,
+        dane.access_token, dane.refresh_token, dane.expires_at, rozpoczecieAt,
+      ).toArray();
+      return wynik.length === 1;
     });
-    return true;
   }
 
   async zapiszOdswiezoneTokeny(dane, idBlokady, poprzedniRefreshToken) {
@@ -107,10 +118,11 @@ export class OAuthTokenStore extends DurableObject {
       if (!blokada) return false;
       const wynik = this.sql.exec(
         `UPDATE oauth_credentials
-         SET access_token = ?, refresh_token = ?, expires_at = ?
+         SET access_token = ?, refresh_token = ?, expires_at = ?,
+             issued_at = MAX(issued_at + 1, ?)
          WHERE id = 1 AND refresh_token = ?
          RETURNING id`,
-        dane.access_token, dane.refresh_token, dane.expires_at, poprzedniRefreshToken,
+        dane.access_token, dane.refresh_token, dane.expires_at, Date.now(), poprzedniRefreshToken,
       ).toArray();
       return wynik.length === 1;
     });
